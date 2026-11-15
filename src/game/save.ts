@@ -67,6 +67,10 @@ export function migrate(state: GameState): GameState {
     fresh.weather.stormDay = state.day + 2;
     state = fresh;
   }
+  if (state.version === 2) {
+    // 0.3 adds seasons and food freshness; missing values mean "fresh" and "no rain yet".
+    state.version = 3;
+  }
   return state;
 }
 

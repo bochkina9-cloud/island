@@ -112,6 +112,17 @@ const ITEM_ART: Record<string, string> = {
           <circle cx="76" cy="66" r="5" fill="#d84a4a" ${S2}/><circle cx="30" cy="72" r="6" fill="none" stroke="${INK}" stroke-width="2"/>`,
   paddle: `<rect x="44" y="6" width="8" height="56" rx="3" fill="#a07a4a" ${S} transform="rotate(25 48 34)"/>
            <path d="M28,58 C24,74 32,92 44,92 C56,92 62,78 58,62 Z" fill="#c2965a" ${S} transform="rotate(25 44 74)"/>`,
+  salt: `<path d="M16,70 C20,52 34,44 48,44 C62,44 76,52 80,70 Z" fill="#f4f1ea" ${S}/>
+         <path d="M30,56 l4,-4 M46,50 l4,-4 M60,56 l4,-4 M38,64 l4,-4 M54,64 l4,-4" stroke="#c9c2b4" stroke-width="2.5"/>
+         <path d="M12,72 h72" stroke="#8a6440" stroke-width="6" stroke-linecap="round"/>`,
+  jerky: `<path d="M18,40 C30,28 60,24 78,34 C84,50 76,66 60,72 C40,78 20,66 18,40 Z" fill="#8a3a2a" ${S}/>
+          <path d="M28,44 l40,-6 M26,56 l44,-4" stroke="#5a2418" stroke-width="3"/>
+          <circle cx="36" cy="40" r="2.5" fill="#f4f1ea"/><circle cx="56" cy="50" r="2.5" fill="#f4f1ea"/><circle cx="46" cy="62" r="2.5" fill="#f4f1ea"/>`,
+  salted_fish: `<path d="M14,50 C26,30 56,28 72,46 L88,32 L86,64 L72,54 C56,72 26,70 14,50 Z" fill="#b8a27a" ${S}/>
+         <circle cx="28" cy="46" r="3.5" fill="${INK}"/><circle cx="44" cy="44" r="2.5" fill="#fff"/><circle cx="56" cy="52" r="2.5" fill="#fff"/><circle cx="50" cy="40" r="2" fill="#fff"/>`,
+  rot: `<path d="M18,64 C14,44 30,30 48,32 C68,30 84,46 78,64 C72,78 26,80 18,64 Z" fill="#6b7a3a" ${S}/>
+        <circle cx="38" cy="50" r="6" fill="#4a5a28"/><circle cx="60" cy="56" r="5" fill="#4a5a28"/>
+        <path d="M34,26 q4,-10 0,-16 M52,24 q4,-10 0,-16 M66,28 q4,-8 0,-14" fill="none" stroke="#8a9a5a" stroke-width="2.5"/>`,
   axe_stone: `<rect x="44" y="18" width="9" height="66" rx="4" fill="#8a6440" ${S} transform="rotate(30 48 50)"/>
         <path d="M40,18 C56,8 78,16 78,32 C66,34 56,40 50,48 Z" fill="#8f8a84" ${S}/>
         <path d="M44,30 l10,6 M48,24 l10,6" stroke="#c9a46a" stroke-width="4"/>`,
@@ -277,6 +288,18 @@ export const SPRITES: Record<string, SpriteDef> = {
     w: 100, h: 60, size: 0.8,
     body: `<ellipse cx="50" cy="38" rx="44" ry="18" fill="#b89a62" ${S}/>
            <path d="M12,34 q20,10 40,0 q20,-10 38,4 M16,44 q30,8 66,-2" fill="none" stroke="#8a6a3a" stroke-width="2.5"/>`,
+  },
+  salt_pan: {
+    w: 160, h: 90, size: 1.5,
+    body: `${[[20, 70], [44, 80], [80, 84], [116, 80], [140, 70], [130, 52], [100, 44], [60, 44], [28, 52]].map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="15" ry="9" fill="#9a958d" ${S2}/>`).join('')}
+           <ellipse cx="80" cy="64" rx="56" ry="16" fill="#7fc8d8" ${S2}/>
+           <path d="M44,62 q20,-8 40,0 q20,8 36,0" fill="none" stroke="#e8f6fa" stroke-width="2.5"/>`,
+  },
+  salt_pan_full: {
+    w: 160, h: 90, size: 1.5,
+    body: `${[[20, 70], [44, 80], [80, 84], [116, 80], [140, 70], [130, 52], [100, 44], [60, 44], [28, 52]].map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="15" ry="9" fill="#9a958d" ${S2}/>`).join('')}
+           <ellipse cx="80" cy="64" rx="56" ry="16" fill="#f4f1ea" ${S2}/>
+           <path d="M50,60 l6,-4 M70,66 l6,-4 M92,58 l6,-4 M110,64 l6,-4" stroke="#c9c2b4" stroke-width="2.5"/>`,
   },
   boar_0: boar(0),
   boar_1: boar(1),

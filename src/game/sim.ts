@@ -1,11 +1,11 @@
 import { makeRng } from '../core/rng';
 import {
   CAMPFIRE_MAX_FUEL, DAY_LENGTH_SEC, DIFFICULTY, DUSK_START, ITEMS, type ItemId, NIGHT_START,
-  RAFT_CARGO, RAFT_SPEED, RAIN_CATCHER_MAX, RECIPES, RESOURCES, type Recipe, type ResourceKind,
-  STRUCTURES, type StructureKind,
+  FLAMMABLE, RAFT_CARGO, RAFT_SPEED, RAIN_CATCHER_MAX, RECIPES, RESOURCES, type Recipe, type ResourceKind,
+  SALT_PAN_MAX, SALT_PER_DAY, SEASONS, STRUCTURES, type Season, type StructureKind, seasonDaysLeft, seasonOf,
 } from './data';
 import {
-  CHEST_SIZE, type Entity, type GameState, type Slot, addItem, decodeBytes, encodeBytes, hasAll, removeItem,
+  CHEST_SIZE, type Entity, type GameState, type Slot, addItem, decodeBytes, encodeBytes, freshness, hasAll, removeItem,
 } from './state';
 import { BOARS, MAP_SIZE, Terrain, randomSpot } from './world';
 
@@ -59,9 +59,12 @@ export class Game {
   fishing: number | null = null;
   /** 0..1 strength of the current storm, for rendering. */
   storm = 0;
+  /** 0..1 strength of rain (showers in the rainy season, or a storm). */
+  rain = 0;
   /** Wind direction during storms (unit vector). */
   wind = { x: 1, z: 0 };
   private coldWarned = false;
+  private slowTick = 0;
 
   /** [rngSeed] makes animal behaviour and random events repeatable (tests). */
   constructor(readonly state: GameState, terrain?: Terrain, rngSeed?: number) {
@@ -88,6 +91,18 @@ export class Game {
 
   get player() {
     return this.state.player;
+  }
+
+  get season(): Season {
+    return seasonOf(this.state.day);
+  }
+
+  /** 0 = lush rainy season, 1 = parched dry season; eases in over the first half day of a season. */
+  get dryness(): number {
+    const s = this.state;
+    const into = ((s.day - 1) % 7) + s.time;
+    const k = Math.min(1, into / 0.5);
+    return this.season === 'dry' ? k : 1 - k;
   }
 
   /** 0 = full day light, 1 = deep night. */
@@ -121,6 +136,13 @@ export class Game {
     this.updateFishing(dt);
     this.updateFires(dt);
     this.updateBoars(dt);
+    this.slowTick += dt;
+    if (this.slowTick >= 1) {
+      this.updateSpoilage(this.slowTick);
+      this.updateWildfire(this.slowTick);
+      this.updateSaltPans(this.slowTick);
+      this.slowTick = 0;
+    }
     this.actionPulse = Math.max(0, this.actionPulse - dt);
     this.hurtPulse = Math.max(0, this.hurtPulse - dt);
     this.exploreCd -= dt;
@@ -155,14 +177,22 @@ export class Game {
     }
     this.emit({ type: 'entities' });
     this.emit({ type: 'dawn', day: s.day });
-    this.say(`Наступил день ${s.day}`);
+    if (seasonOf(s.day) !== seasonOf(s.day - 1)) {
+      this.say(this.season === 'dry'
+        ? 'Начался сухой сезон: дождей не будет, вода нужнее, трава у костра может загореться. Время варить соль.'
+        : 'Начался сезон дождей: частые ливни и штормы, еда портится быстрее. Дождесборники наполнятся.');
+    } else if (seasonDaysLeft(s.day) === 1) {
+      this.say(`Завтра начнётся ${this.season === 'dry' ? 'сезон дождей' : 'сухой сезон'}`);
+    } else {
+      this.say(`Наступил день ${s.day}`);
+    }
   }
 
   private updateStats(dt: number) {
     const p = this.player;
     const decay = this.diff.decay;
     p.hunger = Math.max(0, p.hunger - dt * 0.13 * decay);
-    p.thirst = Math.max(0, p.thirst - dt * 0.2 * decay);
+    p.thirst = Math.max(0, p.thirst - dt * 0.2 * decay * SEASONS[this.season].thirst);
     let dh = 0;
     if (p.hunger <= 0) dh -= 0.6;
     if (p.thirst <= 0) dh -= 0.6;
@@ -309,7 +339,12 @@ export class Game {
 
   /** Text for the context hint, or null when there is nothing to do with it. */
   actionLabel(e: Entity): string | null {
+    if ((e.burn ?? 0) > 0) return this.flaskSips() > 0 ? 'Потушить водой из фляги' : 'Горит! Нужна вода во фляге';
     if (e.kind === 'boar') return 'Атаковать кабана';
+    if (e.kind === 'salt_pan') {
+      const n = Math.floor(e.salt ?? 0);
+      return n > 0 ? `Собрать соль (${n})` : this.season === 'dry' ? 'Солеварня: соль выпаривается' : 'Солеварня: в сезон дождей соли почти нет';
+    }
     if (e.kind === 'drop' && e.item) return `Подобрать: ${ITEMS[e.item.item].name}`;
     if (e.kind === 'campfire') {
       const raw = this.player.inv.find((s) => s && ITEMS[s.item].cooksInto);
@@ -386,7 +421,28 @@ export class Game {
   /** Does one step of work. Returns true to keep going (more hits needed). */
   private perform(e: Entity): boolean {
     const p = this.player;
+    if ((e.burn ?? 0) > 0) {
+      if (!this.useFlaskSip()) {
+        this.say('Нужна вода во фляге, чтобы потушить');
+        return false;
+      }
+      e.burn = 0;
+      this.actionPulse = 0.3;
+      this.actCd = 0.5;
+      this.say('Потушили');
+      return false;
+    }
     if (e.kind === 'boar') return this.attackBoar(e);
+    if (e.kind === 'salt_pan') {
+      const n = Math.floor(e.salt ?? 0);
+      if (n > 0) {
+        this.give('salt', n, e);
+        e.salt = (e.salt ?? 0) - n;
+        this.actionPulse = 0.3;
+      }
+      this.actCd = 0.5;
+      return false;
+    }
     if (e.kind === 'drop' && e.item) {
       const left = addItem(p.inv, e.item.item, e.item.count, e.item.durability);
       if (left === e.item.count) {
@@ -459,7 +515,7 @@ export class Game {
     for (const [item, n] of Object.entries(def.yields)) this.give(item as ItemId, n ?? 0, e);
     if (def.bonus && this.rng() < def.bonus.chance) this.give(def.bonus.item, 1, e);
     if (def.regrowDays) {
-      e.regrowOn = this.state.day + def.regrowDays;
+      e.regrowOn = this.state.day + Math.max(1, Math.round(def.regrowDays * SEASONS[this.season].regrow));
     } else if (def.becomes) {
       e.kind = def.becomes;
     } else {
@@ -527,12 +583,17 @@ export class Game {
     const def = ITEMS[s.item];
     if (def.food) {
       const f = def.food;
-      p.hunger = Math.min(100, p.hunger + (f.hunger ?? 0));
-      p.thirst = Math.min(100, p.thirst + (f.thirst ?? 0));
-      p.hp = Math.max(1, Math.min(100, p.hp + (f.health ?? 0)));
+      const band = def.spoilDays !== undefined ? freshness(s) : 'fresh';
+      const k = band === 'fresh' ? 1 : band === 'stale' ? 0.6 : 0.4;
+      const sick = band === 'spoiling' ? -4 : 0;
+      p.hunger = Math.min(100, p.hunger + (f.hunger ?? 0) * k);
+      p.thirst = Math.max(0, Math.min(100, p.thirst + (f.thirst ?? 0)));
+      p.hp = Math.max(1, Math.min(100, p.hp + (f.health ?? 0) + sick));
       removeItem(p.inv, s.item, 1);
       this.actionPulse = 0.3;
-      if ((f.health ?? 0) < 0) this.say('Сырое мясо вредно: живот болит');
+      if (s.item === 'rot') this.say('Фу! Гниль есть нельзя');
+      else if ((f.health ?? 0) < 0) this.say('Сырое вредно: живот болит');
+      else if (band !== 'fresh') this.say('Еда несвежая: сытости меньше');
       return;
     }
     if (def.tool === 'flask') {
@@ -546,6 +607,17 @@ export class Game {
       return;
     }
     if (def.tool) this.equip(index);
+  }
+
+  private flaskSips(): number {
+    return [this.player.hand, ...this.player.inv].reduce((n, s) => (s?.item === 'flask' ? n + (s.durability ?? 0) : n), 0);
+  }
+
+  private useFlaskSip(): boolean {
+    const s = [this.player.hand, ...this.player.inv].find((x) => x?.item === 'flask' && (x.durability ?? 0) >= 1);
+    if (!s) return false;
+    s.durability = (s.durability ?? 0) - 1;
+    return true;
   }
 
   /** Tops up flasks in the inventory; returns how many sips were added. */
@@ -633,6 +705,11 @@ export class Game {
       return this.state.entities.every((e) => e.kind !== 'raft' || Math.hypot(e.x - x, e.z - z) > 2.5);
     }
     if (!this.terrain.walkable(x, z)) return false;
+    if (kind === 'salt_pan') {
+      // Needs sea water at hand: on the beach, right by the sea.
+      const nearSea = [0, 1, 2, 3, 4, 5, 6, 7].some((i) => this.terrain.sailable(x + Math.cos(i * 0.785) * 2.5, z + Math.sin(i * 0.785) * 2.5));
+      if (!nearSea) return false;
+    }
     const r = STRUCTURES[kind].solid;
     if (Math.hypot(x - this.player.x, z - this.player.z) > 6) return false;
     return this.state.entities.every((e) => {
@@ -655,6 +732,7 @@ export class Game {
       e.hp = 100;
     }
     if (kind === 'rain_catcher') e.water = 0;
+    if (kind === 'salt_pan') e.salt = 0;
     if (kind === 'shelter') {
       this.player.spawnX = x;
       this.player.spawnZ = z + 1.2;
@@ -669,7 +747,8 @@ export class Game {
   private updateFires(dt: number) {
     for (const e of this.state.entities) {
       if (e.kind === 'campfire' && (e.fuel ?? 0) > 0) {
-        const rate = this.storm > 0.3 && !this.nearShelter(e.x, e.z) ? 3 : 1;
+        const exposed = !this.nearShelter(e.x, e.z);
+        const rate = this.storm > 0.3 && exposed ? 3 : this.rain > 0.3 && exposed ? 1.5 : 1;
         e.fuel = Math.max(0, e.fuel! - dt * rate);
       }
     }
@@ -683,6 +762,7 @@ export class Game {
         out.push({ x: e.x, z: e.z, r: 4 + 5 * Math.min(1, e.fuel! / 120) });
       }
     }
+    for (const e of this.state.entities) if ((e.burn ?? 0) > 0) out.push({ x: e.x, z: e.z, r: 3.5 });
     if (this.player.hand?.item === 'torch') out.push({ x: this.player.x, z: this.player.z, r: 6.5 });
     return out;
   }
@@ -991,15 +1071,26 @@ export class Game {
       this.say('Шторм утих');
     }
     if (now >= end) {
-      // Schedule the next storm in 2–4 days.
-      w.stormDay = s.day + 2 + Math.floor(this.rng() * 3);
+      // Next storm: soon in the rainy season, rarely in the dry one.
+      w.stormDay = s.day + (this.season === 'rainy' ? 2 + Math.floor(this.rng() * 2) : 4 + Math.floor(this.rng() * 3));
       w.stormAt = 0.1 + this.rng() * 0.5;
       w.stormLength = 0.14 + this.rng() * 0.06;
       w.warned = false;
     }
-    if (this.storm > 0.3) {
+    // Showers in the rainy season.
+    if (this.season === 'rainy') {
+      if (w.rainTo === undefined || now >= w.rainTo) {
+        const gap = 0.05 + this.rng() * 0.2;
+        w.rainFrom = now + gap;
+        w.rainTo = w.rainFrom + 0.06 + this.rng() * 0.12;
+      }
+    }
+    const showering = this.season === 'rainy' && w.rainFrom !== undefined && now >= w.rainFrom && now < (w.rainTo ?? 0);
+    const rainTarget = Math.max(this.storm, showering ? 0.7 : 0);
+    this.rain += (rainTarget - this.rain) * Math.min(1, dt * 0.6);
+    if (this.rain > 0.3) {
       for (const e of s.entities) {
-        if (e.kind === 'rain_catcher') e.water = Math.min(RAIN_CATCHER_MAX, (e.water ?? 0) + dt / 12);
+        if (e.kind === 'rain_catcher') e.water = Math.min(RAIN_CATCHER_MAX, (e.water ?? 0) + (dt / 12) * this.rain);
       }
     }
   }
@@ -1012,6 +1103,100 @@ export class Game {
   sheltered(x: number, z: number): boolean {
     if (this.nearShelter(x, z)) return true;
     return this.state.entities.some((e) => e.kind === 'campfire' && (e.fuel ?? 0) > 0 && Math.hypot(e.x - x, e.z - z) < 3);
+  }
+
+  // ---------------- Food spoilage ----------------
+
+  private updateSpoilage(dt: number) {
+    const seasonK = SEASONS[this.season].spoil;
+    let rotted = false;
+    const tick = (slots: (Slot | null)[], k: number, mine: boolean) => {
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        if (!s) continue;
+        const days = ITEMS[s.item].spoilDays;
+        if (days === undefined) continue;
+        s.fresh = (s.fresh ?? 1) - (dt * seasonK * k) / (days * DAY_LENGTH_SEC);
+        if (s.fresh <= 0) {
+          slots[i] = { item: 'rot', count: s.count };
+          if (mine) rotted = true;
+        }
+      }
+    };
+    const p = this.player;
+    tick(p.inv, 1, true);
+    for (const e of this.state.entities) {
+      // A closed chest keeps food in the shade: it spoils at half speed.
+      if (e.slots) tick(e.slots, e.kind === 'chest' ? 0.5 : 1, false);
+      if (e.item) {
+        const box = [e.item as Slot | null];
+        tick(box, 1, false);
+        e.item = box[0]!;
+      }
+    }
+    if (rotted) this.say('Часть еды испортилась и стала гнилью');
+  }
+
+  // ---------------- Wildfire ----------------
+
+  private flammable(e: Entity): boolean {
+    return FLAMMABLE.has(e.kind) && e.regrowOn === undefined;
+  }
+
+  private updateWildfire(dt: number) {
+    const ents = this.state.entities;
+    const dry = this.season === 'dry' && this.rain < 0.2;
+    const burning = ents.filter((e) => (e.burn ?? 0) > 0);
+    // Sparks from campfires set dry grass alight.
+    if (dry) {
+      for (const f of ents) {
+        if (f.kind !== 'campfire' || (f.fuel ?? 0) <= 0) continue;
+        for (const e of ents) {
+          if (!this.flammable(e) || (e.burn ?? 0) > 0 || e.kind === 'tree' || e.kind === 'palm') continue;
+          if (Math.hypot(e.x - f.x, e.z - f.z) < 2.2 && this.rng() < 0.006 * dt) {
+            e.burn = 10;
+            this.say('Искры подожгли сухую траву! Потушите водой из фляги или отойдите');
+            this.emit({ type: 'entities' });
+          }
+        }
+      }
+    }
+    if (!burning.length) return;
+    const p = this.player;
+    for (const b of burning) {
+      // Rain puts fires out; in the dry season they spread.
+      b.burn = (b.burn ?? 0) - dt * (this.rain > 0.3 ? 6 : 1);
+      if (dry) {
+        for (const e of ents) {
+          if (e === b || !this.flammable(e) || (e.burn ?? 0) > 0) continue;
+          if (Math.hypot(e.x - b.x, e.z - b.z) < 2.2 && this.rng() < 0.07 * dt) e.burn = 8 + this.rng() * 6;
+        }
+      }
+      if (Math.hypot(p.x - b.x, p.z - b.z) < 1.1 && p.onRaft === undefined) this.hurt(5 * dt);
+      if (b.burn <= 0) this.burnOut(b);
+    }
+  }
+
+  /** What is left after a fire: stumps, scorched grass, a ruined shelter. */
+  private burnOut(e: Entity) {
+    delete e.burn;
+    if (e.kind === 'palm' || e.kind === 'tree') e.kind = 'stump';
+    else if (e.kind === 'shelter') {
+      this.removeEntity(e.id);
+      this.say('Шалаш сгорел');
+    } else if (e.kind in RESOURCES) e.regrowOn = this.state.day + 3;
+    this.emit({ type: 'entities' });
+  }
+
+  // ---------------- Salt ----------------
+
+  private updateSaltPans(dt: number) {
+    const sunny = this.season === 'dry' && this.rain < 0.2 ? 1 : this.rain < 0.2 ? 0.15 : 0;
+    if (!sunny) return;
+    const rate = (SALT_PER_DAY * sunny * dt) / DAY_LENGTH_SEC;
+    for (const e of this.state.entities) {
+      if (e.kind === 'salt_pan') e.salt = Math.min(SALT_PAN_MAX, (e.salt ?? 0) + rate);
+    }
   }
 
   // ---------------- World bookkeeping ----------------

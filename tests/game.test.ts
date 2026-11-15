@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RECIPES } from '../src/game/data';
+import { RECIPES, seasonOf } from '../src/game/data';
 import { Game } from '../src/game/sim';
 import { type WorldSettings, addItem, countItem, removeItem } from '../src/game/state';
 import { MAP_SIZE, createWorld } from '../src/game/world';
@@ -85,7 +85,7 @@ describe('gameplay', () => {
     game.actOn(sapling.id);
     run(game, 10);
     expect(countItem(p.inv, 'twigs')).toBe(2);
-    expect(sapling.regrowOn).toBe(3);
+    expect(sapling.regrowOn).toBe(4); // 2 days × 1.5 in the dry season
 
     expect(game.craft(RECIPES.find((r) => r.id === 'axe')!)).toBe(true);
     expect(countItem(p.inv, 'axe')).toBe(1);
@@ -361,9 +361,154 @@ describe('vertical slice', () => {
     old.player.inv[0] = { item: 'axe', count: 1, durability: 10 };
     old.day = 4;
     const state = migrate(old as never);
-    expect(state.version).toBe(2);
+    expect(state.version).toBe(3);
     expect(state.day).toBe(4);
     expect(state.player.inv[0]).toEqual({ item: 'axe', count: 1, durability: 10 });
     expect(state.weather.stormDay).toBe(6);
+  });
+});
+
+describe('seasons, spoilage, salt and fire', () => {
+  function newGame() {
+    const { state, terrain } = createWorld(settings);
+    state.entities = state.entities.filter((e) => e.kind !== 'boar');
+    return new Game(state, terrain, 7);
+  }
+  function run(game: Game, seconds: number) {
+    for (let t = 0; t < seconds; t += 0.05) game.update(0.05, still);
+  }
+  /** Long waits with the survivor kept fed and watered. */
+  function runFed(game: Game, seconds: number) {
+    for (let t = 0; t < seconds; t += 1) {
+      game.player.hunger = 100;
+      game.player.thirst = 100;
+      run(game, 1);
+    }
+  }
+
+  it('seasons alternate every 7 days and change thirst', () => {
+    expect([1, 7, 8, 14, 15].map(seasonOf)).toEqual(['dry', 'dry', 'rainy', 'rainy', 'dry']);
+    const dry = newGame();
+    const wet = newGame();
+    wet.state.day = 8;
+    run(dry, 60);
+    run(wet, 60);
+    expect(100 - dry.player.thirst).toBeGreaterThan((100 - wet.player.thirst) * 1.5);
+  });
+
+  it('merging stacks averages freshness', () => {
+    const inv = new Array(2).fill(null);
+    addItem(inv, 'berries', 2, undefined, 1);
+    addItem(inv, 'berries', 2, undefined, 0.5);
+    expect(inv[0].fresh).toBeCloseTo(0.75);
+  });
+
+  it('meat rots in two days, stale food feeds less, salted meat keeps', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'meat', 1);
+    addItem(p.inv, 'jerky', 1);
+    runFed(game, 480 * 1.2);
+    const meat = p.inv.find((s) => s?.item === 'meat')!;
+    expect(meat.fresh).toBeLessThan(0.5);
+    p.hunger = 10;
+    game.useSlot(p.inv.indexOf(meat));
+    expect(p.hunger).toBeCloseTo(10 + 15 * 0.6, 0);
+    addItem(p.inv, 'meat', 1);
+    runFed(game, 480 * 2.1);
+    expect(countItem(p.inv, 'meat')).toBe(0);
+    expect(countItem(p.inv, 'rot')).toBe(1);
+    expect(p.inv.find((s) => s?.item === 'jerky')!.fresh).toBeGreaterThan(0.85);
+  });
+
+  it('food in a chest spoils at half speed', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'wood', 4);
+    addItem(p.inv, 'rope', 1);
+    addItem(p.inv, 'fish', 1);
+    expect(game.place('chest', p.x + 1.5, p.z)).toBe(true);
+    const chest = game.state.entities.find((e) => e.kind === 'chest')!;
+    game.chestPut(chest, p.inv.findIndex((s) => s?.item === 'fish'));
+    addItem(p.inv, 'fish', 1);
+    runFed(game, 480);
+    const inChest = chest.slots!.find((s) => s?.item === 'fish')!;
+    const inHand = p.inv.find((s) => s?.item === 'fish')!;
+    expect(inChest.fresh!).toBeGreaterThan(inHand.fresh! + 0.2);
+  });
+
+  it('a salt pan on the beach makes salt in the dry season, salting needs it', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'stone', 4);
+    addItem(p.inv, 'wood', 2);
+    expect(game.place('salt_pan', p.x, p.z - 3)).toBe(false); // inland: no sea water
+    // Find a beach spot by the sea.
+    let placed = false;
+    for (let r = 1; r < 40 && !placed; r += 0.5) {
+      for (let a = 0; a < 6.28 && !placed; a += 0.2) {
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        if (game.terrain.walkable(x, z) && game.canPlace('salt_pan', x, z)) {
+          placed = game.place('salt_pan', x, z);
+        } else if (game.terrain.walkable(x, z)) {
+          p.x = x;
+          p.z = z;
+        }
+      }
+    }
+    expect(placed).toBe(true);
+    const pan = game.state.entities.find((e) => e.kind === 'salt_pan')!;
+    run(game, 240);
+    expect(pan.salt).toBeGreaterThan(1.3);
+    expect(game.craft(RECIPES.find((r) => r.id === 'jerky')!)).toBe(false);
+  });
+
+  it('dry grass near a campfire catches fire; a flask puts it out', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'wood', 2);
+    addItem(p.inv, 'grass', 3);
+    addItem(p.inv, 'flask', 1);
+    // Surround a fire with grass.
+    expect(game.place('campfire', p.x + 2, p.z)).toBe(true);
+    const fire = game.state.entities.find((e) => e.kind === 'campfire')!;
+    fire.fuel = 240;
+    for (let i = 0; i < 6; i++) {
+      game.state.entities.push({ id: 9000 + i, kind: 'grass_tuft', x: fire.x + Math.cos(i) * 1.5, z: fire.z + Math.sin(i) * 1.5 });
+    }
+    let burning: ReturnType<typeof game.entity>;
+    for (let t = 0; t < 400 && !burning; t += 1) {
+      run(game, 1);
+      burning = game.state.entities.find((e) => (e.burn ?? 0) > 0);
+    }
+    expect(burning).toBeDefined();
+    // Stand on the far side of the burning tuft, away from the fire.
+    const dx = burning!.x - fire.x;
+    const dz = burning!.z - fire.z;
+    const d = Math.hypot(dx, dz);
+    p.x = burning!.x + (dx / d) * 1.2;
+    p.z = burning!.z + (dz / d) * 1.2;
+    game.actOn(burning!.id);
+    run(game, 1);
+    expect(burning!.burn).toBe(0);
+    expect(p.inv.find((s) => s?.item === 'flask')!.durability).toBe(2);
+  });
+
+  it('in the rainy season it rains often and the rain catcher fills', () => {
+    const game = newGame();
+    game.state.day = 8;
+    const p = game.player;
+    addItem(p.inv, 'wood', 3);
+    addItem(p.inv, 'grass', 4);
+    addItem(p.inv, 'rope', 1);
+    expect(game.place('rain_catcher', p.x + 2, p.z)).toBe(true);
+    let rained = false;
+    for (let t = 0; t < 480; t += 1) {
+      run(game, 1);
+      rained ||= game.rain > 0.5;
+    }
+    expect(rained).toBe(true);
+    expect(game.state.entities.find((e) => e.kind === 'rain_catcher')!.water).toBeGreaterThan(1);
   });
 });

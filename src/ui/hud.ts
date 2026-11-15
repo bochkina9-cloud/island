@@ -1,6 +1,6 @@
-import { DUSK_START, ITEMS, type ItemId, NIGHT_START, RECIPES, type Recipe, TABS } from '../game/data';
+import { DUSK_START, ITEMS, type ItemId, NIGHT_START, RECIPES, type Recipe, SEASONS, TABS, seasonDaysLeft } from '../game/data';
 import type { Game } from '../game/sim';
-import { type Entity, type Slot, countItem } from '../game/state';
+import { type Entity, type Slot, countItem, freshness } from '../game/state';
 import { MAP_SIZE } from '../game/world';
 import { iconUrl } from '../render/art';
 
@@ -24,6 +24,7 @@ export class Hud {
   readonly root: HTMLElement;
   private clockHand: SVGLineElement;
   private dayLabel: HTMLElement;
+  private seasonLabel: HTMLElement;
   private bars: Record<'hp' | 'hunger' | 'thirst', { fill: SVGCircleElement; value: HTMLElement; box: HTMLElement }>;
   private hotbar: HTMLElement;
   private handSlot: HTMLElement;
@@ -61,9 +62,11 @@ export class Hud {
         <line class="hand" x1="0" y1="0" x2="0" y2="-40" stroke="#3d2b1f" stroke-width="4" stroke-linecap="round"/>
         <circle r="4" fill="#3d2b1f"/>
       </svg>
-      <div class="day">День 1</div>`;
+      <div class="day">День 1</div>
+      <div class="season small"></div>`;
     this.clockHand = clock.querySelector('.hand')!;
     this.dayLabel = clock.querySelector('.day')!;
+    this.seasonLabel = clock.querySelector('.season')!;
     this.root.appendChild(clock);
 
     // Top right: health, hunger, thirst.
@@ -93,7 +96,7 @@ export class Hud {
     for (const t of TABS) {
       const b = el('button', 'tab panel');
       b.dataset.tab = t.id;
-      const iconKey = t.id === 'tools' ? 'axe' : t.id === 'survival' ? 'torch' : 'wood';
+      const iconKey = { tools: 'axe', survival: 'torch', food: 'meat_cooked', build: 'wood' }[t.id];
       b.innerHTML = `<img src="${iconUrl(iconKey)}" alt=""><span>${t.name}</span>`;
       b.onclick = () => this.toggleCraft(t.id);
       this.craftTabs.appendChild(b);
@@ -173,6 +176,9 @@ export class Hud {
     this.drawRain(dt);
     this.clockHand.setAttribute('transform', `rotate(${g.state.time * 360})`);
     this.dayLabel.textContent = `День ${g.state.day}`;
+    const left = seasonDaysLeft(g.state.day);
+    this.seasonLabel.textContent = `${SEASONS[g.season].name} · ${left === 1 ? 'последний день' : `ещё ${left} дн.`}`;
+    this.seasonLabel.classList.toggle('dry', g.season === 'dry');
     for (const key of ['hp', 'hunger', 'thirst'] as const) {
       const v = p[key];
       const b = this.bars[key];
@@ -224,7 +230,7 @@ export class Hud {
     this.craftPanel.innerHTML = `<h3>${tab.name}</h3>`;
     for (const r of RECIPES.filter((q) => q.tab === this.openTab)) {
       const can = this.game.canCraft(r);
-      const icon = 'item' in r.makes ? r.makes.item : r.makes.structure === 'campfire' ? 'wood' : r.makes.structure === 'chest' ? 'rope' : 'grass';
+      const icon = 'item' in r.makes ? r.makes.item : { campfire: 'wood', chest: 'rope', shelter: 'grass', rain_catcher: 'flask', raft: 'paddle', salt_pan: 'salt' }[r.makes.structure];
       const row = el('div', `recipe ${can ? 'can' : ''}`);
       const needs = Object.entries(r.needs).map(([id, n]) => {
         const have = countItem(this.game.player.inv, id as ItemId);
@@ -365,7 +371,7 @@ export class Hud {
   // ---------------- Rain ----------------
 
   private drawRain(dt: number) {
-    const storm = this.game.storm;
+    const storm = Math.max(this.game.storm, this.game.rain * 0.6);
     const c = this.rain;
     if (storm < 0.02) {
       if (c.width) c.width = 0;
@@ -419,6 +425,11 @@ export class Hud {
     if (!slot) return;
     const def = ITEMS[slot.item];
     const parts = [`<b>${def.name}</b>`, `<span class="muted">${def.hint}</span>`];
+    if (def.spoilDays !== undefined) {
+      const f = Math.round((slot.fresh ?? 1) * 100);
+      const band = freshness(slot);
+      parts.push(`<span class="${band}">Свежесть ${f}%${band === 'stale' ? ' — черствеет' : band === 'spoiling' ? ' — вот-вот испортится' : ''}</span>`);
+    }
     if (def.food) {
       const f = def.food;
       parts.push(`<span>${[f.hunger ? `сытость +${f.hunger}` : '', f.thirst ? `вода +${f.thirst}` : '', f.health ? `здоровье ${f.health > 0 ? '+' : ''}${f.health}` : ''].filter(Boolean).join(', ')}</span>`);
@@ -445,6 +456,12 @@ function renderSlot(s: HTMLElement, slot: Slot | null, hotkey?: string) {
     const max = ITEMS[slot.item].durability;
     if (max && slot.durability !== undefined) {
       parts.push(`<span class="dur"><i style="width:${Math.max(0, (slot.durability / max) * 100)}%"></i></span>`);
+    }
+    if (ITEMS[slot.item].spoilDays !== undefined) {
+      const f = Math.max(0, Math.min(1, slot.fresh ?? 1));
+      // Green → yellow → red as food goes off.
+      const hue = Math.round(f * 110);
+      parts.push(`<span class="dur fresh"><i style="width:${Math.ceil(f * 10) * 10}%;background:hsl(${hue},55%,42%)"></i></span>`);
     }
   }
   const html = parts.join('');

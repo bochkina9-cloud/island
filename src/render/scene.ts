@@ -16,6 +16,7 @@ const shared = {
   uLightCount: { value: 0 },
   uTime: { value: 0 },
   uStorm: { value: 0 },
+  uDry: { value: 0 },
 };
 
 const LIGHT_GLSL = /* glsl */ `
@@ -24,14 +25,23 @@ const LIGHT_GLSL = /* glsl */ `
   uniform int uLightCount;
   uniform float uTime;
   uniform float uStorm;
+  uniform float uDry;
+  /** Dry season: greens turn straw-yellow. */
+  vec3 applySeason(vec3 col) {
+    float green = smoothstep(0.0, 0.12, col.g - max(col.r, col.b));
+    vec3 straw = col * vec3(1.22, 1.0, 0.6) + vec3(0.05, 0.02, 0.0);
+    return mix(col, straw, green * uDry * 0.6);
+  }
   vec3 applyLight(vec3 col, vec3 wpos) {
     vec3 l = uAmbient;
+    // Firelight matters in the dark; in full daylight it is barely visible.
+    float dark = clamp(1.15 - uAmbient.g, 0.0, 1.0);
     for (int i = 0; i < ${MAX_LIGHTS}; i++) {
       if (i >= uLightCount) break;
       vec4 L = uLights[i];
       float d = distance(wpos.xz, vec2(L.x, L.z));
       float a = 1.0 - smoothstep(L.w * 0.25, L.w, d);
-      l += vec3(1.0, 0.72, 0.42) * a * L.y;
+      l += vec3(1.0, 0.72, 0.42) * a * L.y * dark;
     }
     return col * min(l, vec3(1.3));
   }
@@ -61,7 +71,7 @@ const SPRITE_FRAG = /* glsl */ `
     vec4 c = texture2D(map, vUv);
     if (c.a < 0.45) discard;
     vec3 col = c.rgb * uTint;
-    col = mix(applyLight(col, vWorld), col, uUnlit);
+    col = mix(applyLight(applySeason(col), vWorld), col, uUnlit);
     col = mix(col, vec3(1.0, 0.35, 0.3), uFlash);
     gl_FragColor = vec4(col, uOpacity);
   }
@@ -91,7 +101,7 @@ const GROUND_FRAG = /* glsl */ `
     float a = smoothstep(-0.012, 0.022, h);
     if (a < 0.01) discard;
     vec4 c = texture2D(map, vUv);
-    gl_FragColor = vec4(applyLight(c.rgb, vWorld), a);
+    gl_FragColor = vec4(applyLight(applySeason(c.rgb), vWorld), a);
   }
 `;
 
@@ -132,7 +142,8 @@ interface SpriteView {
   shadow: THREE.Mesh;
   key: string;
   flame?: THREE.Mesh;
-  extra?: THREE.Mesh;
+  /** Wildfire flames on a burning object. */
+  fire?: THREE.Mesh;
 }
 
 export class WorldView {
@@ -308,6 +319,7 @@ export class WorldView {
       case 'boar': return 'boar_0';
       case 'vines': return e.regrowOn !== undefined ? 'vines_cut' : 'vines';
       case 'nest': return e.regrowOn !== undefined ? 'nest_empty' : 'nest';
+      case 'salt_pan': return (e.salt ?? 0) >= 1 ? 'salt_pan_full' : 'salt_pan';
       case 'rain_catcher': return (e.water ?? 0) >= 1 ? 'rain_catcher_full' : 'rain_catcher';
       case 'drop': return `item_${e.item?.item ?? 'stone'}`;
       default: return e.kind;
@@ -352,6 +364,7 @@ export class WorldView {
   private removeView(v: SpriteView) {
     this.scene.remove(v.mesh, v.shadow);
     if (v.flame) this.scene.remove(v.flame);
+    if (v.fire) this.scene.remove(v.fire);
     v.mat.dispose();
     this.views.delete(v.entity.id);
   }
@@ -388,7 +401,9 @@ export class WorldView {
 
     // Daylight.
     shared.uStorm.value = g.storm;
-    shared.uAmbient.value.copy(ambientFor(g.state.time)).multiply(new THREE.Color(1 - 0.42 * g.storm, 1 - 0.36 * g.storm, 1 - 0.25 * g.storm));
+    shared.uDry.value = g.dryness;
+    const gloom = Math.max(g.storm, g.rain * 0.35);
+    shared.uAmbient.value.copy(ambientFor(g.state.time)).multiply(new THREE.Color(1 - 0.42 * gloom, 1 - 0.36 * gloom, 1 - 0.25 * gloom));
     const lights = g.lights().sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z));
     const n = Math.min(MAX_LIGHTS, lights.length);
     for (let i = 0; i < n; i++) {
@@ -450,6 +465,22 @@ export class WorldView {
       v.mesh.position.set(e.x + wobble, y, e.z);
       v.mesh.scale.set(sx, sy, 1);
       v.shadow.position.set(e.x, 0.02, e.z + 0.05);
+      const onFire = (e.burn ?? 0) > 0;
+      if (onFire && !v.fire) {
+        const fm = this.spriteMaterial('flame');
+        fm.uniforms.uUnlit.value = 1;
+        v.fire = new THREE.Mesh(this.geometry('flame'), fm);
+        v.fire.rotation.x = -PITCH;
+        this.scene.add(v.fire);
+      }
+      if (v.fire) {
+        v.fire.visible = onFire;
+        if (onFire) {
+          const big = e.kind === 'tree' || e.kind === 'palm' || e.kind === 'shelter' ? 2 : 1;
+          v.fire.position.set(e.x, 0.1, e.z + 0.05);
+          v.fire.scale.set(big * (1 + Math.sin(this.clock * 15 + e.id) * 0.08), big * (1 + Math.sin(this.clock * 9 + e.id) * 0.12), 1);
+        }
+      }
       if (v.flame) {
         const burning = (e.fuel ?? 0) > 0;
         v.flame.visible = burning;

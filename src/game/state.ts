@@ -1,6 +1,6 @@
 import { type Difficulty, type EntityKind, type ItemId, ITEMS } from './data';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const INVENTORY_SIZE = 12;
 export const CHEST_SIZE = 9;
 
@@ -9,6 +9,8 @@ export interface Slot {
   count: number;
   /** Remaining uses / burn seconds for tools. */
   durability?: number;
+  /** Food freshness 1 → 0; missing means fresh. */
+  fresh?: number;
 }
 
 export type DeathMode = 'classic' | 'soft';
@@ -38,6 +40,10 @@ export interface Entity {
   slots?: (Slot | null)[];
   /** Rain catcher: sips of water stored. */
   water?: number;
+  /** Salt pan: salt ready to collect. */
+  salt?: number;
+  /** Seconds left of burning (wildfire). */
+  burn?: number;
   /** Animals and drops. */
   hp?: number;
   item?: Slot;
@@ -64,6 +70,9 @@ export interface Weather {
   /** Length in fractions of a day. */
   stormLength: number;
   warned: boolean;
+  /** Current or next rain shower in the rainy season, as absolute day + time. */
+  rainFrom?: number;
+  rainTo?: number;
 }
 
 export interface GameState {
@@ -87,15 +96,21 @@ export function countItem(inv: (Slot | null)[], item: ItemId): number {
   return inv.reduce((n, s) => (s && s.item === item ? n + s.count : n), 0);
 }
 
-/** Adds items; returns how many did not fit. */
-export function addItem(inv: (Slot | null)[], item: ItemId, count: number, durability?: number): number {
+/**
+ * Adds items; returns how many did not fit. Food carries its freshness:
+ * a stack's freshness becomes the average of what is merged into it.
+ */
+export function addItem(inv: (Slot | null)[], item: ItemId, count: number, durability?: number, fresh?: number): number {
   const def = ITEMS[item];
+  const spoils = def.spoilDays !== undefined;
+  const f = fresh ?? 1;
   let left = count;
   if (def.stack > 1) {
     for (const s of inv) {
       if (left <= 0) break;
       if (s && s.item === item && s.count < def.stack) {
         const put = Math.min(def.stack - s.count, left);
+        if (spoils) s.fresh = ((s.fresh ?? 1) * s.count + f * put) / (s.count + put);
         s.count += put;
         left -= put;
       }
@@ -104,11 +119,24 @@ export function addItem(inv: (Slot | null)[], item: ItemId, count: number, durab
   for (let i = 0; i < inv.length && left > 0; i++) {
     if (!inv[i]) {
       const put = Math.min(def.stack, left);
-      inv[i] = { item, count: put, ...(def.durability ? { durability: durability ?? def.durability } : {}) };
+      inv[i] = {
+        item,
+        count: put,
+        ...(def.durability ? { durability: durability ?? def.durability } : {}),
+        ...(spoils ? { fresh: f } : {}),
+      };
       left -= put;
     }
   }
   return left;
+}
+
+/** Freshness bands used by eating and the interface. */
+export function freshness(slot: Slot): 'fresh' | 'stale' | 'spoiling' {
+  const f = slot.fresh ?? 1;
+  if (f >= 0.5) return 'fresh';
+  if (f >= 0.2) return 'stale';
+  return 'spoiling';
 }
 
 /** Removes items if there are enough; returns false (and changes nothing) otherwise. */
