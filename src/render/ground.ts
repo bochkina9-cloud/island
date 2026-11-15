@@ -2,7 +2,7 @@ import { Noise2D } from '../core/noise';
 import { makeRng } from '../core/rng';
 import { type Biome, MAP_SIZE, type Terrain } from '../game/world';
 
-const PX = 8; // canvas pixels per world unit
+const PX = 6; // canvas pixels per world unit
 
 const COLORS: Record<Biome, [number, number, number]> = {
   deep: [0, 0, 0],
@@ -63,8 +63,9 @@ export function paintGround(terrain: Terrain): HTMLCanvasElement {
       const z = (py + 0.5) / PX;
       const h = terrain.height(x, z);
       const o = (py * size + px) * 4;
+      // Under water: plain wet sand. Whether it shows is decided by the shader from the height map.
       if (h < -0.03) {
-        d[o + 3] = 0;
+        d[o] = 190; d[o + 1] = 170; d[o + 2] = 130; d[o + 3] = 255;
         continue;
       }
       // Warp the lookup a little so borders wander like brush edges.
@@ -85,14 +86,10 @@ export function paintGround(terrain: Terrain): HTMLCanvasElement {
       const sz = terrain.height(x, z + 0.5) - terrain.height(x, z - 0.5);
       const shade = (-sx - sz) * 160;
       r += shade; gr += shade; bl += shade;
-      // Wet sand at the waterline, fading into transparency.
-      if (h < 0.025) {
-        const k = Math.max(0, Math.min(1, (h + 0.03) / 0.055));
-        r = r * 0.82; gr = gr * 0.8; bl = bl * 0.78;
-        d[o + 3] = Math.round(255 * k);
-      } else {
-        d[o + 3] = 255;
-      }
+      // Wet sand at the waterline.
+      const wet = Math.max(0, Math.min(1, (0.045 - h) / 0.045));
+      r *= 1 - 0.18 * wet; gr *= 1 - 0.2 * wet; bl *= 1 - 0.22 * wet;
+      d[o + 3] = 255;
       if (terrain.inPond(x, z)) {
         r = 96; gr = 176; bl = 196;
         d[o + 3] = 255;
@@ -121,7 +118,7 @@ export function paintGround(terrain: Terrain): HTMLCanvasElement {
   // Grass strokes and pebbles.
   const rng = makeRng(terrain.seed ^ 0x777);
   ctx.lineCap = 'round';
-  for (let i = 0; i < 14000; i++) {
+  for (let i = 0; i < 36000; i++) {
     const x = rng() * MAP_SIZE;
     const z = rng() * MAP_SIZE;
     const b = terrain.biome(x, z);

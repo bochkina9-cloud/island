@@ -96,6 +96,25 @@ const ITEM_ART: Record<string, string> = {
   meat_cooked: `<path d="M20,52 C18,30 44,18 64,26 C82,34 84,58 66,70 C50,80 22,72 20,52 Z" fill="#9a5a32" ${S}/>
          <path d="M30,44 l30,-6 M28,54 l36,-6 M32,64 l28,-4" stroke="#5a3418" stroke-width="3"/>
          <rect x="64" y="58" width="22" height="9" rx="4" fill="#f4ecd8" ${S2} transform="rotate(30 75 62)"/>`,
+  fish: `<path d="M14,50 C26,30 56,28 72,46 L88,32 L86,64 L72,54 C56,72 26,70 14,50 Z" fill="#7fa8c4" ${S}/>
+         <circle cx="28" cy="46" r="3.5" fill="${INK}"/><path d="M40,40 q8,10 0,20" fill="none" stroke="${INK}" stroke-width="2"/>
+         <path d="M48,38 q10,4 18,0" stroke="#e8f2f8" stroke-width="3" fill="none"/>`,
+  fish_cooked: `<path d="M14,50 C26,30 56,28 72,46 L88,32 L86,64 L72,54 C56,72 26,70 14,50 Z" fill="#c4813f" ${S}/>
+         <circle cx="28" cy="46" r="3.5" fill="${INK}"/><path d="M38,42 l6,14 M50,40 l6,16 M62,44 l4,10" stroke="#7a4a1e" stroke-width="3"/>`,
+  egg: `<ellipse cx="38" cy="54" rx="16" ry="21" fill="#f2ead8" ${S}/><ellipse cx="62" cy="58" rx="15" ry="19" fill="#e8dcc0" ${S}/>
+        <circle cx="34" cy="48" r="2.5" fill="#9a8a70"/><circle cx="64" cy="54" r="2.5" fill="#9a8a70"/><circle cx="58" cy="64" r="2" fill="#9a8a70"/>`,
+  egg_cooked: `<ellipse cx="48" cy="54" rx="34" ry="24" fill="#fbf8ee" ${S}/><circle cx="50" cy="52" r="12" fill="#f2b33a" ${S2}/>`,
+  flask: `<circle cx="48" cy="58" r="26" fill="#7a5a32" ${S}/><rect x="40" y="18" width="16" height="16" rx="3" fill="#c2a27a" ${S2}/>
+          <path d="M30,46 q18,-10 36,0" fill="none" stroke="#c9a46a" stroke-width="5"/>
+          <path d="M26,40 q-14,-8 -6,-26" fill="none" stroke="#c9a46a" stroke-width="4"/>`,
+  fishing_rod: `<path d="M18,86 L80,10" stroke="#a07a4a" stroke-width="6" stroke-linecap="round"/>
+          <path d="M80,10 C86,30 84,50 76,62" fill="none" stroke="${INK}" stroke-width="1.5"/>
+          <circle cx="76" cy="66" r="5" fill="#d84a4a" ${S2}/><circle cx="30" cy="72" r="6" fill="none" stroke="${INK}" stroke-width="2"/>`,
+  paddle: `<rect x="44" y="6" width="8" height="56" rx="3" fill="#a07a4a" ${S} transform="rotate(25 48 34)"/>
+           <path d="M28,58 C24,74 32,92 44,92 C56,92 62,78 58,62 Z" fill="#c2965a" ${S} transform="rotate(25 44 74)"/>`,
+  axe_stone: `<rect x="44" y="18" width="9" height="66" rx="4" fill="#8a6440" ${S} transform="rotate(30 48 50)"/>
+        <path d="M40,18 C56,8 78,16 78,32 C66,34 56,40 50,48 Z" fill="#8f8a84" ${S}/>
+        <path d="M44,30 l10,6 M48,24 l10,6" stroke="#c9a46a" stroke-width="4"/>`,
   axe: `<rect x="44" y="18" width="9" height="66" rx="4" fill="#a07a4a" ${S} transform="rotate(30 48 50)"/>
         <path d="M44,20 C58,12 74,18 76,30 C66,30 56,36 52,44 Z" fill="#8c98a4" ${S}/>
         <path d="M70,24 l5,6" stroke="#eef3f7" stroke-width="3"/>`,
@@ -216,6 +235,48 @@ export const SPRITES: Record<string, SpriteDef> = {
            <path d="M80,160 L110,96 L140,160 Z" fill="#3a2a1a" ${S2}/>
            <path d="M96,12 L124,40 M124,12 L96,40" stroke="#8a6440" stroke-width="7" stroke-linecap="round"/>
            <path d="M84,160 L136,160" stroke="#d9c07a" stroke-width="8"/>`,
+  },
+  raft: {
+    w: 200, h: 150, size: 2.4,
+    body: `${[0, 1, 2, 3, 4, 5].map((i) => `<rect x="${18 + i * 27}" y="88" width="26" height="54" rx="12" fill="${i % 2 ? '#9a6e3e' : '#a87a46'}" ${S}/>`).join('')}
+           <path d="M14,104 h172 M14,128 h172" stroke="#c9a46a" stroke-width="5"/>
+           <path d="M100,92 L100,10" stroke="#7a5432" stroke-width="7" stroke-linecap="round"/>
+           <path d="M104,16 C140,22 150,50 146,80 L104,74 Z" fill="#efe4c4" ${S}/>
+           <path d="M112,30 q16,8 24,30" fill="none" stroke="#c9b48a" stroke-width="2"/>`,
+  },
+  rain_catcher: {
+    w: 140, h: 120, size: 1.5,
+    body: `<path d="M30,116 L40,56 M110,116 L100,56" stroke="#7a5432" stroke-width="7" stroke-linecap="round"/>
+           <path d="M14,40 L126,40 L96,70 L44,70 Z" fill="#7fae4a" ${S}/>
+           <path d="M30,44 l20,20 M70,42 l0,26 M110,44 l-20,20" stroke="#5a8a33" stroke-width="2.5"/>
+           <path d="M50,78 h40 l-6,32 h-28 Z" fill="#8a6440" ${S}/>`,
+  },
+  rain_catcher_full: {
+    w: 140, h: 120, size: 1.5,
+    body: `<path d="M30,116 L40,56 M110,116 L100,56" stroke="#7a5432" stroke-width="7" stroke-linecap="round"/>
+           <path d="M14,40 L126,40 L96,70 L44,70 Z" fill="#7fae4a" ${S}/>
+           <path d="M30,44 l20,20 M70,42 l0,26 M110,44 l-20,20" stroke="#5a8a33" stroke-width="2.5"/>
+           <path d="M50,78 h40 l-6,32 h-28 Z" fill="#8a6440" ${S}/><ellipse cx="70" cy="80" rx="18" ry="4" fill="#6fc4d8" ${S2}/>`,
+  },
+  vines: {
+    w: 120, h: 130, size: 1.8,
+    body: `<path d="M20,126 C26,90 18,60 30,20 M60,126 C54,96 66,70 58,30 M96,126 C92,90 104,64 94,24" fill="none" stroke="#5a8a33" stroke-width="6" stroke-linecap="round"/>
+           ${[[30, 30], [26, 64], [60, 44], [64, 84], [94, 36], [98, 76], [22, 100], [92, 104]].map(([x, y]) => `<ellipse cx="${x + 8}" cy="${y}" rx="10" ry="6" fill="#7fb04a" ${S2} transform="rotate(-30 ${x + 8} ${y})"/>`).join('')}`,
+  },
+  vines_cut: {
+    w: 120, h: 130, size: 1.8,
+    body: `<path d="M20,126 C24,110 20,100 24,90 M60,126 C58,114 62,104 60,96 M96,126 C94,112 98,104 96,94" fill="none" stroke="#6f8a40" stroke-width="5" stroke-linecap="round"/>`,
+  },
+  nest: {
+    w: 100, h: 60, size: 0.8,
+    body: `<ellipse cx="50" cy="38" rx="44" ry="18" fill="#b89a62" ${S}/>
+           <path d="M12,34 q20,10 40,0 q20,-10 38,4 M16,44 q30,8 66,-2" fill="none" stroke="#8a6a3a" stroke-width="2.5"/>
+           <ellipse cx="40" cy="28" rx="9" ry="11" fill="#f2ead8" ${S2}/><ellipse cx="58" cy="28" rx="9" ry="11" fill="#e8dcc0" ${S2}/>`,
+  },
+  nest_empty: {
+    w: 100, h: 60, size: 0.8,
+    body: `<ellipse cx="50" cy="38" rx="44" ry="18" fill="#b89a62" ${S}/>
+           <path d="M12,34 q20,10 40,0 q20,-10 38,4 M16,44 q30,8 66,-2" fill="none" stroke="#8a6a3a" stroke-width="2.5"/>`,
   },
   boar_0: boar(0),
   boar_1: boar(1),

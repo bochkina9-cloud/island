@@ -3,9 +3,10 @@
 export type ItemId =
   | 'wood' | 'twigs' | 'grass' | 'flint' | 'stone' | 'rope'
   | 'coconut' | 'berries' | 'berries_cooked' | 'meat' | 'meat_cooked'
-  | 'axe' | 'pickaxe' | 'spear' | 'torch';
+  | 'fish' | 'fish_cooked' | 'egg' | 'egg_cooked'
+  | 'axe' | 'axe_stone' | 'pickaxe' | 'spear' | 'torch' | 'flask' | 'fishing_rod' | 'paddle';
 
-export type ToolKind = 'axe' | 'pickaxe' | 'weapon' | 'light';
+export type ToolKind = 'axe' | 'pickaxe' | 'weapon' | 'light' | 'rod' | 'paddle' | 'flask';
 
 export interface FoodEffect {
   hunger?: number;
@@ -21,6 +22,8 @@ export interface ItemDef {
   /** Uses (tools) or seconds of burning (torch). */
   durability?: number;
   damage?: number;
+  /** Work done per hit (stronger tools finish faster). */
+  power?: number;
   food?: FoodEffect;
   /** Fuel seconds when thrown into a campfire. */
   fuel?: number;
@@ -41,7 +44,15 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   berries_cooked: { name: 'Печёные ягоды', stack: 20, food: { hunger: 12 }, hint: 'Сытнее сырых.' },
   meat: { name: 'Сырое мясо', stack: 10, food: { hunger: 15, health: -6 }, cooksInto: 'meat_cooked', hint: 'Лучше пожарить: сырое вредит здоровью.' },
   meat_cooked: { name: 'Жареное мясо', stack: 10, food: { hunger: 32, health: 6 }, hint: 'Сытно и полезно.' },
+  fish: { name: 'Сырая рыба', stack: 10, food: { hunger: 10, health: -3 }, cooksInto: 'fish_cooked', hint: 'Ловится удочкой с берега или с плота.' },
+  fish_cooked: { name: 'Жареная рыба', stack: 10, food: { hunger: 25, health: 4 }, hint: 'Хорошая еда в дорогу.' },
+  egg: { name: 'Яйцо чайки', stack: 10, food: { hunger: 6, health: -2 }, cooksInto: 'egg_cooked', hint: 'Из гнёзд на скалистом острове.' },
+  egg_cooked: { name: 'Печёное яйцо', stack: 10, food: { hunger: 18, health: 2 }, hint: 'Сытно.' },
   axe: { name: 'Топор', stack: 1, tool: 'axe', durability: 60, damage: 14, hint: 'Рубить деревья.' },
+  axe_stone: { name: 'Каменный топор', stack: 1, tool: 'axe', durability: 160, damage: 18, power: 2, hint: 'Рубит вдвое быстрее и служит дольше.' },
+  flask: { name: 'Кокосовая фляга', stack: 1, tool: 'flask', durability: 3, hint: 'Три глотка воды. Наполняется у пруда и у дождесборника.' },
+  fishing_rod: { name: 'Удочка', stack: 1, tool: 'rod', durability: 30, hint: 'Возьмите в руку и подойдите к воде.' },
+  paddle: { name: 'Весло', stack: 1, tool: 'paddle', hint: 'Без весла плотом не управлять.' },
   pickaxe: { name: 'Кирка', stack: 1, tool: 'pickaxe', durability: 40, damage: 12, hint: 'Добывать камень.' },
   spear: { name: 'Копьё', stack: 1, tool: 'weapon', durability: 80, damage: 26, hint: 'Оружие против зверей.' },
   torch: { name: 'Факел', stack: 1, tool: 'light', durability: 90, damage: 6, hint: 'Светит ночью, пока горит.' },
@@ -58,13 +69,19 @@ export interface Recipe {
 
 export const RECIPES: Recipe[] = [
   { id: 'axe', name: 'Топор', tab: 'tools', needs: { twigs: 1, flint: 1 }, makes: { item: 'axe' } },
+  { id: 'axe_stone', name: 'Каменный топор', tab: 'tools', needs: { wood: 1, stone: 2, rope: 1 }, makes: { item: 'axe_stone' } },
   { id: 'pickaxe', name: 'Кирка', tab: 'tools', needs: { twigs: 2, flint: 2 }, makes: { item: 'pickaxe' } },
   { id: 'spear', name: 'Копьё', tab: 'tools', needs: { twigs: 2, flint: 1, rope: 1 }, makes: { item: 'spear' } },
+  { id: 'fishing_rod', name: 'Удочка', tab: 'tools', needs: { twigs: 2, rope: 1 }, makes: { item: 'fishing_rod' } },
+  { id: 'paddle', name: 'Весло', tab: 'tools', needs: { wood: 2, rope: 1 }, makes: { item: 'paddle' } },
   { id: 'torch', name: 'Факел', tab: 'survival', needs: { twigs: 2, grass: 2 }, makes: { item: 'torch' } },
+  { id: 'flask', name: 'Кокосовая фляга', tab: 'survival', needs: { coconut: 1, rope: 1 }, makes: { item: 'flask' } },
   { id: 'rope', name: 'Верёвка', tab: 'survival', needs: { grass: 3 }, makes: { item: 'rope' } },
   { id: 'campfire', name: 'Костёр', tab: 'build', needs: { wood: 2, grass: 3 }, makes: { structure: 'campfire' } },
   { id: 'chest', name: 'Сундук', tab: 'build', needs: { wood: 4, rope: 1 }, makes: { structure: 'chest' } },
   { id: 'shelter', name: 'Шалаш', tab: 'build', needs: { wood: 4, rope: 2, grass: 6 }, makes: { structure: 'shelter' } },
+  { id: 'rain_catcher', name: 'Дождесборник', tab: 'build', needs: { wood: 3, grass: 4, rope: 1 }, makes: { structure: 'rain_catcher' } },
+  { id: 'raft', name: 'Плот', tab: 'build', needs: { wood: 8, rope: 4 }, makes: { structure: 'raft' } },
 ];
 
 export const TABS: { id: Recipe['tab']; name: string }[] = [
@@ -73,11 +90,11 @@ export const TABS: { id: Recipe['tab']; name: string }[] = [
   { id: 'build', name: 'Постройки' },
 ];
 
-export type StructureKind = 'campfire' | 'chest' | 'shelter';
+export type StructureKind = 'campfire' | 'chest' | 'shelter' | 'rain_catcher' | 'raft';
 
 export type ResourceKind =
   | 'palm' | 'tree' | 'stump' | 'sapling' | 'grass_tuft' | 'berry_bush'
-  | 'boulder' | 'flint_ground' | 'driftwood' | 'coconut_ground' | 'pond';
+  | 'boulder' | 'flint_ground' | 'driftwood' | 'coconut_ground' | 'pond' | 'vines' | 'nest';
 
 export type EntityKind = ResourceKind | StructureKind | 'boar' | 'drop';
 
@@ -110,12 +127,16 @@ export const RESOURCES: Record<ResourceKind, ResourceDef> = {
   driftwood: { name: 'Коряга', verb: 'Подобрать', work: 1, yields: { twigs: 2, wood: 1 } },
   coconut_ground: { name: 'Кокос', verb: 'Подобрать', work: 1, yields: { coconut: 1 } },
   pond: { name: 'Пресный пруд', verb: 'Попить', work: 1, yields: {} },
+  vines: { name: 'Лианы', verb: 'Нарезать лиан', work: 2, yields: { rope: 1 }, regrowDays: 2 },
+  nest: { name: 'Гнездо чайки', verb: 'Взять яйца', work: 1, yields: { egg: 2 }, regrowDays: 2 },
 };
 
 export const STRUCTURES: Record<StructureKind, { name: string; solid: number }> = {
   campfire: { name: 'Костёр', solid: 0.4 },
   chest: { name: 'Сундук', solid: 0.4 },
   shelter: { name: 'Шалаш', solid: 0.9 },
+  rain_catcher: { name: 'Дождесборник', solid: 0.4 },
+  raft: { name: 'Плот', solid: 0 },
 };
 
 export const CAMPFIRE_MAX_FUEL = 240;
@@ -130,3 +151,7 @@ export const DIFFICULTY = {
   hard: { name: 'Суровая', decay: 1.4, enemyDamage: 1.5 },
 } as const;
 export type Difficulty = keyof typeof DIFFICULTY;
+
+export const RAFT_CARGO = 6;
+export const RAFT_SPEED = 3.6;
+export const RAIN_CATCHER_MAX = 6;

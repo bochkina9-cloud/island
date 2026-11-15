@@ -15,6 +15,7 @@ const shared = {
   uLights: { value: Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4()) },
   uLightCount: { value: 0 },
   uTime: { value: 0 },
+  uStorm: { value: 0 },
 };
 
 const LIGHT_GLSL = /* glsl */ `
@@ -22,6 +23,7 @@ const LIGHT_GLSL = /* glsl */ `
   uniform vec4 uLights[${MAX_LIGHTS}];
   uniform int uLightCount;
   uniform float uTime;
+  uniform float uStorm;
   vec3 applyLight(vec3 col, vec3 wpos) {
     vec3 l = uAmbient;
     for (int i = 0; i < ${MAX_LIGHTS}; i++) {
@@ -80,12 +82,16 @@ const SHADOW_FRAG = /* glsl */ `
 const GROUND_FRAG = /* glsl */ `
   ${LIGHT_GLSL}
   uniform sampler2D map;
+  uniform sampler2D uHeight;
   varying vec2 vUv;
   varying vec3 vWorld;
   void main() {
+    // Fine height channel: -0.25..0.25 around the shoreline.
+    float h = texture2D(uHeight, vWorld.xz / ${MAP_SIZE.toFixed(1)}).g * 0.5 - 0.25;
+    float a = smoothstep(-0.012, 0.022, h);
+    if (a < 0.01) discard;
     vec4 c = texture2D(map, vUv);
-    if (c.a < 0.01) discard;
-    gl_FragColor = vec4(applyLight(c.rgb, vWorld), c.a);
+    gl_FragColor = vec4(applyLight(c.rgb, vWorld), a);
   }
 `;
 
@@ -105,10 +111,11 @@ const WATER_FRAG = /* glsl */ `
     vec3 col = mix(shallow, mid, smoothstep(0.0, 0.12, depth));
     col = mix(col, deep, smoothstep(0.12, 0.6, depth));
     float w = sin(vWorld.x * 0.9 + uTime * 0.8) + sin(vWorld.z * 0.7 - uTime * 1.1) + sin((vWorld.x + vWorld.z) * 0.35 + uTime * 0.5);
-    col += vec3(0.03) * w;
+    col = mix(col, vec3(0.16, 0.30, 0.38), uStorm * 0.55);
+    col += vec3(0.03 + uStorm * 0.05) * w;
     // Surf: animated foam lines running towards the shore.
     float band = 1.0 - smoothstep(0.0, 0.07, depth);
-    float lines = smoothstep(0.55, 0.9, sin(depth * 140.0 - uTime * 2.2));
+    float lines = smoothstep(0.55, 0.9, sin(depth * 140.0 - uTime * (2.2 + uStorm * 3.0)));
     float foam = band * (0.35 + 0.65 * lines);
     col = mix(col, vec3(0.97, 0.98, 0.95), foam * 0.85);
     // Small sparkles in deeper water.
@@ -138,6 +145,7 @@ export class WorldView {
   private player: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; shadow: THREE.Mesh; tool: THREE.Mesh; toolMat: THREE.ShaderMaterial };
   private ghost: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; key: string } | null = null;
   private shadowMat: THREE.ShaderMaterial;
+  private heightTex!: THREE.DataTexture;
   private clock = 0;
   zoom = 26;
   readonly groundCanvas: HTMLCanvasElement;
@@ -243,7 +251,7 @@ export class WorldView {
     tex.colorSpace = THREE.NoColorSpace;
     tex.anisotropy = 8;
     const mat = new THREE.ShaderMaterial({
-      uniforms: { ...shared, map: { value: tex } },
+      uniforms: { ...shared, map: { value: tex }, uHeight: { value: this.heightTex } },
       vertexShader: SPRITE_VERT,
       fragmentShader: GROUND_FRAG,
       transparent: true,
@@ -258,19 +266,22 @@ export class WorldView {
   }
 
   private buildWater(terrain: Terrain) {
-    const n = 256;
+    // R: coarse height -1..1 for water depth; G: fine height -0.25..0.25 for a smooth shoreline.
+    const n = 1024;
     const data = new Uint8Array(n * n * 4);
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const h = terrain.height(((i + 0.5) / n) * MAP_SIZE, ((j + 0.5) / n) * MAP_SIZE) - SHORE;
-        const v = Math.max(0, Math.min(255, Math.round((h + 1) * 127.5)));
-        data.set([v, v, v, 255], (j * n + i) * 4);
+        const coarse = Math.max(0, Math.min(255, Math.round((h + 1) * 127.5)));
+        const fine = Math.max(0, Math.min(255, Math.round(((h + 0.25) / 0.5) * 255)));
+        data.set([coarse, fine, 0, 255], (j * n + i) * 4);
       }
     }
     const heightTex = new THREE.DataTexture(data, n, n);
     heightTex.magFilter = THREE.LinearFilter;
     heightTex.minFilter = THREE.LinearFilter;
     heightTex.needsUpdate = true;
+    this.heightTex = heightTex;
     const mat = new THREE.ShaderMaterial({
       uniforms: { ...shared, uHeight: { value: heightTex } },
       vertexShader: SPRITE_VERT,
@@ -295,6 +306,9 @@ export class WorldView {
       case 'grass_tuft': return e.regrowOn !== undefined ? 'grass_cut' : 'grass_tuft';
       case 'berry_bush': return e.regrowOn !== undefined ? 'berry_bush_empty' : 'berry_bush';
       case 'boar': return 'boar_0';
+      case 'vines': return e.regrowOn !== undefined ? 'vines_cut' : 'vines';
+      case 'nest': return e.regrowOn !== undefined ? 'nest_empty' : 'nest';
+      case 'rain_catcher': return (e.water ?? 0) >= 1 ? 'rain_catcher_full' : 'rain_catcher';
       case 'drop': return `item_${e.item?.item ?? 'stone'}`;
       default: return e.kind;
     }
@@ -373,7 +387,8 @@ export class WorldView {
     const p = g.player;
 
     // Daylight.
-    shared.uAmbient.value.copy(ambientFor(g.state.time));
+    shared.uStorm.value = g.storm;
+    shared.uAmbient.value.copy(ambientFor(g.state.time)).multiply(new THREE.Color(1 - 0.42 * g.storm, 1 - 0.36 * g.storm, 1 - 0.25 * g.storm));
     const lights = g.lights().sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z));
     const n = Math.min(MAX_LIGHTS, lights.length);
     for (let i = 0; i < n; i++) {
@@ -383,13 +398,15 @@ export class WorldView {
     shared.uLightCount.value = n;
 
     // Player.
-    const bob = g.moving ? Math.abs(Math.sin(this.clock * 11)) * 0.12 : 0;
-    const frame = g.moving && Math.sin(this.clock * 11) > 0 ? 'player_1' : 'player_0';
+    const sailing = p.onRaft !== undefined;
+    const bob = sailing ? 0.28 + Math.sin(this.clock * 2.2) * 0.05 : g.moving ? Math.abs(Math.sin(this.clock * 11)) * 0.12 : 0;
+    const frame = g.moving && !sailing && Math.sin(this.clock * 11) > 0 ? 'player_1' : 'player_0';
     this.player.mat.uniforms.map.value = this.texture(frame);
     this.player.mat.uniforms.uFlash.value = g.hurtPulse > 0 ? 0.5 : 0;
     this.player.mesh.position.set(p.x, bob, p.z);
     this.player.mesh.scale.set(g.facing * (1 + g.actionPulse * 0.15), 1 - g.actionPulse * 0.12, 1);
     this.player.shadow.position.set(p.x, 0.02, p.z + 0.05);
+    this.player.shadow.visible = !sailing;
     const hand = p.hand;
     this.player.tool.visible = !!hand;
     if (hand) {
@@ -401,9 +418,14 @@ export class WorldView {
       this.player.tool.rotation.set(-PITCH, 0, -g.facing * swing);
     }
 
-    // Entities.
+    // Entities. Far ones are hidden and skipped.
     for (const v of this.views.values()) {
       const e = v.entity;
+      const far = Math.abs(e.x - p.x) > 40 || Math.abs(e.z - p.z) > 34;
+      v.mesh.visible = !far;
+      v.shadow.visible = !far;
+      if (v.flame) v.flame.visible = !far;
+      if (far && e.kind !== 'boar') continue;
       let sx = 1;
       let sy = 1;
       let y = 0;
@@ -415,8 +437,12 @@ export class WorldView {
         sx = b.facing;
         y = b.moving ? Math.abs(Math.sin(this.clock * 12 + e.id)) * 0.06 : 0;
       } else if (e.kind === 'palm' || e.kind === 'tree') {
-        // Gentle sway in the wind, stronger at the top (approximated by skew-free rotation).
-        v.mesh.rotation.z = Math.sin(this.clock * 0.9 + e.id) * 0.015;
+        // Sway in the wind; much stronger in a storm.
+        v.mesh.rotation.z = Math.sin(this.clock * (0.9 + g.storm * 2) + e.id) * (0.015 + g.storm * 0.06);
+      } else if (e.kind === 'raft') {
+        y = Math.sin(this.clock * 2.2 + e.id) * 0.05 + 0.02;
+        v.mesh.rotation.z = Math.sin(this.clock * 1.7 + e.id) * (0.02 + g.storm * 0.05);
+        v.shadow.visible = false;
       } else if (e.kind === 'drop') {
         y = 0.05 + Math.sin(this.clock * 3 + e.id) * 0.04;
       }
@@ -464,6 +490,7 @@ export class WorldView {
     const v3 = new THREE.Vector3();
     for (const v of this.views.values()) {
       const e = v.entity;
+      if (!v.mesh.visible) continue;
       const d = this.art[v.key].def;
       const h = d.size * (e.kind === 'drop' ? 0.7 : 1);
       const w = (h * d.w) / d.h;

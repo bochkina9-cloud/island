@@ -1,12 +1,13 @@
 import { makeRng } from '../core/rng';
 import {
   CAMPFIRE_MAX_FUEL, DAY_LENGTH_SEC, DIFFICULTY, DUSK_START, ITEMS, type ItemId, NIGHT_START,
-  RECIPES, RESOURCES, type Recipe, type ResourceKind, STRUCTURES, type StructureKind,
+  RAFT_CARGO, RAFT_SPEED, RAIN_CATCHER_MAX, RECIPES, RESOURCES, type Recipe, type ResourceKind,
+  STRUCTURES, type StructureKind,
 } from './data';
 import {
   CHEST_SIZE, type Entity, type GameState, type Slot, addItem, decodeBytes, encodeBytes, hasAll, removeItem,
 } from './state';
-import { MAP_SIZE, Terrain, randomSpot } from './world';
+import { BOARS, MAP_SIZE, Terrain, randomSpot } from './world';
 
 export interface MoveInput {
   /** -1..1 on each axis; x → east, z → south (screen down). */
@@ -19,7 +20,8 @@ export type GameEvent =
   | { type: 'hit'; x: number; z: number }
   | { type: 'dawn'; day: number }
   | { type: 'death'; classic: boolean }
-  | { type: 'entities' };
+  | { type: 'entities' }
+  | { type: 'storm'; active: boolean };
 
 type Task = { kind: 'move'; x: number; z: number } | { kind: 'act'; id: number };
 
@@ -53,11 +55,19 @@ export class Game {
   actionPulse = 0;
   hurtPulse = 0;
   dead = false;
+  /** Seconds left until a fish bites; null when not fishing. */
+  fishing: number | null = null;
+  /** 0..1 strength of the current storm, for rendering. */
+  storm = 0;
+  /** Wind direction during storms (unit vector). */
+  wind = { x: 1, z: 0 };
+  private coldWarned = false;
 
-  constructor(readonly state: GameState, terrain?: Terrain) {
+  /** [rngSeed] makes animal behaviour and random events repeatable (tests). */
+  constructor(readonly state: GameState, terrain?: Terrain, rngSeed?: number) {
     this.terrain = terrain ?? new Terrain(state.settings.seedText);
     this.explored = decodeBytes(state.explored, MAP_SIZE * MAP_SIZE);
-    this.rng = makeRng((Date.now() ^ this.terrain.seed) >>> 0);
+    this.rng = makeRng(rngSeed ?? (Date.now() ^ this.terrain.seed) >>> 0);
   }
 
   on(fn: (e: GameEvent) => void) {
@@ -104,8 +114,11 @@ export class Game {
     if (this.dead) return;
     dt = Math.min(dt, 0.1);
     this.advanceTime(dt);
+    this.updateWeather(dt);
     this.updateStats(dt);
     this.updatePlayer(dt, input);
+    this.updateRaft(dt);
+    this.updateFishing(dt);
     this.updateFires(dt);
     this.updateBoars(dt);
     this.actionPulse = Math.max(0, this.actionPulse - dt);
@@ -132,11 +145,13 @@ export class Game {
     for (const e of s.entities) {
       if (e.regrowOn !== undefined && e.regrowOn <= s.day) delete e.regrowOn;
     }
-    // Keep the boar population steady.
-    const boars = s.entities.filter((e) => e.kind === 'boar').length;
-    for (let i = boars; i < 4; i++) {
-      const p = randomSpot(this.terrain, this.rng, ['forest', 'grass'], this.player, 25);
-      if (p) this.spawn({ kind: 'boar', ...p, hp: 60 });
+    // Keep the boar population steady on each island.
+    for (const is of this.terrain.islands) {
+      const boars = s.entities.filter((e) => e.kind === 'boar' && this.terrain.islandAt(e.x, e.z) === is).length;
+      for (let i = boars; i < BOARS[is.kind]; i++) {
+        const p = randomSpot(this.terrain, this.rng, ['forest', 'grass'], this.player, 25, is);
+        if (p) this.spawn({ kind: 'boar', ...p, hp: 60 });
+      }
     }
     this.emit({ type: 'entities' });
     this.emit({ type: 'dawn', day: s.day });
@@ -151,7 +166,14 @@ export class Game {
     let dh = 0;
     if (p.hunger <= 0) dh -= 0.6;
     if (p.thirst <= 0) dh -= 0.6;
-    if (p.hunger > 60 && p.thirst > 60) dh += 0.15;
+    if (p.hunger > 60 && p.thirst > 60 && this.storm < 0.5) dh += 0.15;
+    if (this.storm > 0.5 && !this.sheltered(p.x, p.z) && p.onRaft === undefined) {
+      dh -= 0.35 * this.diff.decay;
+      if (!this.coldWarned) {
+        this.coldWarned = true;
+        this.say('Вы промокли и мёрзнете: укройтесь в шалаше или у костра');
+      }
+    }
     p.hp = Math.min(100, p.hp + dh * dt);
     // Torch burns while in hand.
     if (p.hand?.item === 'torch') {
@@ -203,16 +225,27 @@ export class Game {
         mz /= len;
       }
       if (Math.abs(mx) > 0.1) this.facing = mx > 0 ? 1 : -1;
-      const step = PLAYER_SPEED * dt;
+      this.fishing = null;
+      const step = (p.onRaft !== undefined ? RAFT_SPEED : PLAYER_SPEED) * dt;
       this.tryMove(p, mx * step, 0);
       this.tryMove(p, 0, mz * step);
     }
   }
 
+  /** Where the player may be: dry land on foot, open water on a raft. */
+  canStand(x: number, z: number): boolean {
+    return this.player.onRaft !== undefined ? this.terrain.sailable(x, z) : this.terrain.walkable(x, z);
+  }
+
   private tryMove(p: { x: number; z: number }, dx: number, dz: number) {
     const nx = p.x + dx;
     const nz = p.z + dz;
-    if (!this.terrain.walkable(nx, nz)) return;
+    if (!this.canStand(nx, nz)) return;
+    if (this.player.onRaft !== undefined) {
+      p.x = nx;
+      p.z = nz;
+      return;
+    }
     for (const e of this.state.entities) {
       const r = this.solidRadius(e);
       if (!r) continue;
@@ -241,6 +274,7 @@ export class Game {
   radiusOf(e: Entity): number {
     if (e.kind === 'pond') return this.terrain.ponds.find((p) => p.x === e.x && p.z === e.z)?.r ?? 1.5;
     if (e.kind === 'boar') return 0.5;
+    if (e.kind === 'raft') return 1.0;
     return Math.max(0.2, this.solidRadius(e));
   }
 
@@ -262,7 +296,7 @@ export class Game {
     let best: Entity | null = null;
     let bestD = Infinity;
     for (const e of this.state.entities) {
-      if (!this.actionLabel(e)) continue;
+      if (e.id === p.onRaft || !this.actionLabel(e)) continue;
       const d = Math.hypot(e.x - p.x, e.z - p.z) - this.radiusOf(e);
       const limit = e.kind === 'boar' ? 2.5 : 2.2;
       if (d < limit && d < bestD) {
@@ -285,11 +319,20 @@ export class Game {
       return (e.fuel ?? 0) > 0 ? 'Костёр горит' : 'Костёр погас: нужно топливо';
     }
     if (e.kind === 'chest') return 'Открыть сундук';
+    if (e.kind === 'raft') {
+      if (this.player.onRaft === e.id) return 'Груз плота';
+      return this.hasItem('paddle') ? 'Сесть на плот' : 'Плот: нужно весло, чтобы плыть';
+    }
+    if (e.kind === 'rain_catcher') {
+      const w = Math.floor(e.water ?? 0);
+      if (w <= 0) return 'Дождесборник пуст: вода наберётся в дождь';
+      return this.hasItem('flask') ? `Наполнить флягу и попить (${w})` : `Попить из дождесборника (${w})`;
+    }
     if (e.kind === 'shelter') return 'Шалаш: здесь вы появитесь';
     if (e.kind in RESOURCES) {
       const def = RESOURCES[e.kind as ResourceKind];
       if (e.regrowOn !== undefined) return null;
-      if (e.kind === 'pond') return 'Попить из пруда';
+      if (e.kind === 'pond') return this.hasItem('flask') ? 'Попить и наполнить флягу' : 'Попить из пруда';
       return `${def.verb}: ${def.name}${def.tool && !this.hasTool(def.tool) ? ` (нужен ${def.tool === 'axe' ? 'топор' : 'кирка'})` : ''}`;
     }
     return null;
@@ -298,7 +341,30 @@ export class Game {
   /** Context action without walking (E / Space). */
   actNearest() {
     const e = this.nearestInteractable();
-    if (e) this.actOn(e.id);
+    if (e) return this.actOn(e.id);
+    const extra = this.extraAction();
+    if (extra === 'disembark') this.disembark();
+    if (extra === 'fish') this.startFishing();
+  }
+
+  /** Actions that are not tied to an object: landing from a raft and fishing. */
+  extraAction(): 'disembark' | 'fish' | null {
+    if (this.player.onRaft !== undefined && this.landingSpot()) return 'disembark';
+    if (this.player.hand?.item === 'fishing_rod' && this.nearWater() && this.fishing === null) return 'fish';
+    return null;
+  }
+
+  extraLabel(): string | null {
+    const a = this.extraAction();
+    if (a === 'disembark') return 'Высадиться на берег';
+    if (a === 'fish') return 'Закинуть удочку';
+    if (this.fishing !== null) return 'Ждём поклёвку…';
+    return null;
+  }
+
+  private hasItem(item: ItemId): boolean {
+    const p = this.player;
+    return p.hand?.item === item || p.inv.some((s) => s?.item === item);
   }
 
   private hasTool(tool: 'axe' | 'pickaxe'): boolean {
@@ -338,6 +404,23 @@ export class Game {
       this.openChest?.(e);
       return false;
     }
+    if (e.kind === 'raft') {
+      if (p.onRaft === e.id) this.openChest?.(e);
+      else this.board(e);
+      return false;
+    }
+    if (e.kind === 'rain_catcher') {
+      if ((e.water ?? 0) < 1) {
+        this.say('Дождесборник пуст');
+        return false;
+      }
+      p.thirst = Math.min(100, p.thirst + 25);
+      e.water = (e.water ?? 0) - 1;
+      e.water -= this.fillFlasks(Math.floor(e.water));
+      this.actionPulse = 0.3;
+      this.actCd = 0.6;
+      return false;
+    }
     if (e.kind === 'shelter') {
       p.spawnX = e.x;
       p.spawnZ = e.z + 1.2;
@@ -352,7 +435,7 @@ export class Game {
       p.thirst = Math.min(100, p.thirst + 30);
       this.actionPulse = 0.3;
       this.actCd = 0.6;
-      this.say('Вы попили пресной воды');
+      this.say(this.fillFlasks(99) > 0 ? 'Вы попили и наполнили флягу' : 'Вы попили пресной воды');
       return false;
     }
     if (def.tool && !this.equipTool(def.tool)) {
@@ -369,7 +452,7 @@ export class Game {
         p.hand = null;
       }
     }
-    e.work = (e.work ?? 0) + 1;
+    e.work = (e.work ?? 0) + (def.tool && p.hand ? ITEMS[p.hand.item].power ?? 1 : 1);
     if (e.work < def.work) return true;
 
     e.work = 0;
@@ -452,7 +535,29 @@ export class Game {
       if ((f.health ?? 0) < 0) this.say('Сырое мясо вредно: живот болит');
       return;
     }
+    if (def.tool === 'flask') {
+      if ((s.durability ?? 0) <= 0) {
+        this.say('Фляга пуста: наполните у пруда или у дождесборника');
+        return;
+      }
+      s.durability = (s.durability ?? 0) - 1;
+      p.thirst = Math.min(100, p.thirst + 25);
+      this.actionPulse = 0.3;
+      return;
+    }
     if (def.tool) this.equip(index);
+  }
+
+  /** Tops up flasks in the inventory; returns how many sips were added. */
+  private fillFlasks(available: number): number {
+    let added = 0;
+    for (const s of [this.player.hand, ...this.player.inv]) {
+      if (s?.item !== 'flask' || added >= available) continue;
+      const room = Math.min(3 - (s.durability ?? 0), available - added);
+      s.durability = (s.durability ?? 0) + room;
+      added += room;
+    }
+    return added;
   }
 
   equip(index: number) {
@@ -521,6 +626,12 @@ export class Game {
   }
 
   canPlace(kind: StructureKind, x: number, z: number): boolean {
+    if (this.player.onRaft !== undefined) return false;
+    if (kind === 'raft') {
+      // On water, right next to the shore, so you can step aboard.
+      if (!this.terrain.sailable(x, z) || Math.hypot(x - this.player.x, z - this.player.z) > 4) return false;
+      return this.state.entities.every((e) => e.kind !== 'raft' || Math.hypot(e.x - x, e.z - z) > 2.5);
+    }
     if (!this.terrain.walkable(x, z)) return false;
     const r = STRUCTURES[kind].solid;
     if (Math.hypot(x - this.player.x, z - this.player.z) > 6) return false;
@@ -539,6 +650,11 @@ export class Game {
     const e = this.spawn({ kind, x, z });
     if (kind === 'campfire') e.fuel = 90;
     if (kind === 'chest') e.slots = new Array(CHEST_SIZE).fill(null);
+    if (kind === 'raft') {
+      e.slots = new Array(RAFT_CARGO).fill(null);
+      e.hp = 100;
+    }
+    if (kind === 'rain_catcher') e.water = 0;
     if (kind === 'shelter') {
       this.player.spawnX = x;
       this.player.spawnZ = z + 1.2;
@@ -552,7 +668,10 @@ export class Game {
 
   private updateFires(dt: number) {
     for (const e of this.state.entities) {
-      if (e.kind === 'campfire' && (e.fuel ?? 0) > 0) e.fuel = Math.max(0, e.fuel! - dt);
+      if (e.kind === 'campfire' && (e.fuel ?? 0) > 0) {
+        const rate = this.storm > 0.3 && !this.nearShelter(e.x, e.z) ? 3 : 1;
+        e.fuel = Math.max(0, e.fuel! - dt * rate);
+      }
     }
   }
 
@@ -705,6 +824,8 @@ export class Game {
     });
     p.inv = p.inv.map(() => null);
     p.hand = null;
+    delete p.onRaft;
+    this.fishing = null;
     p.x = p.spawnX;
     p.z = p.spawnZ;
     p.hp = 50;
@@ -714,6 +835,183 @@ export class Game {
     for (const b of this.brains.values()) if (b.mode === 'chase') b.mode = 'wander';
     this.emit({ type: 'entities' });
     this.emit({ type: 'death', classic: false });
+  }
+
+  // ---------------- Raft ----------------
+
+  private board(raft: Entity) {
+    const p = this.player;
+    if (!this.hasItem('paddle')) {
+      this.say('Нужно весло: 2 дерева + верёвка');
+      return;
+    }
+    p.onRaft = raft.id;
+    p.x = raft.x;
+    p.z = raft.z;
+    this.task = null;
+    this.say('Вы на плоту. WASD — грести, E у берега — высадиться, клик по плоту — груз.');
+  }
+
+  /** A dry spot within reach of the raft. */
+  landingSpot(): { x: number; z: number } | null {
+    const p = this.player;
+    for (let r = 1; r <= 2.6; r += 0.4) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        if (this.terrain.walkable(x, z) && this.terrain.height(x, z) > 0.02) return { x, z };
+      }
+    }
+    return null;
+  }
+
+  disembark() {
+    const spot = this.landingSpot();
+    if (!spot) return;
+    delete this.player.onRaft;
+    this.player.x = spot.x;
+    this.player.z = spot.z;
+    this.task = null;
+  }
+
+  private updateRaft(dt: number) {
+    const p = this.player;
+    if (p.onRaft === undefined) return;
+    const raft = this.entity(p.onRaft);
+    if (!raft) {
+      delete p.onRaft;
+      return;
+    }
+    if (this.storm > 0.3) {
+      // The wind pushes the raft and the waves batter it.
+      const push = 1.4 * this.storm * dt;
+      this.tryMove(p, this.wind.x * push, 0);
+      this.tryMove(p, 0, this.wind.z * push);
+      raft.hp = (raft.hp ?? 100) - 1.6 * this.storm * dt * this.diff.enemyDamage;
+      if (raft.hp <= 0) return this.wreck(raft);
+    }
+    raft.x = p.x;
+    raft.z = p.z;
+  }
+
+  /** The raft breaks: cargo is lost, the sea throws you onto the nearest shore. */
+  private wreck(raft: Entity) {
+    const p = this.player;
+    delete p.onRaft;
+    this.removeEntity(raft.id);
+    const shore = this.nearestShore(p.x, p.z);
+    p.x = shore.x;
+    p.z = shore.z;
+    this.emit({ type: 'entities' });
+    this.say('Шторм разбил плот! Груз утонул, вас выбросило на берег.');
+    this.hurt(20);
+  }
+
+  private nearestShore(x: number, z: number): { x: number; z: number } {
+    for (let r = 1; r < MAP_SIZE; r += 1) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / Math.max(8, r)) {
+        const px = x + Math.cos(a) * r;
+        const pz = z + Math.sin(a) * r;
+        if (this.terrain.walkable(px, pz) && this.terrain.height(px, pz) > 0.03) return { x: px, z: pz };
+      }
+    }
+    return { x: this.player.spawnX, z: this.player.spawnZ };
+  }
+
+  // ---------------- Fishing ----------------
+
+  nearWater(): boolean {
+    const p = this.player;
+    if (p.onRaft !== undefined) return true;
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+      if (this.terrain.sailable(p.x + Math.cos(a) * 1.6, p.z + Math.sin(a) * 1.6)) return true;
+    }
+    return false;
+  }
+
+  startFishing() {
+    this.fishing = 3 + this.rng() * 5;
+    this.task = null;
+    this.say('Удочка заброшена: стойте спокойно');
+  }
+
+  private updateFishing(dt: number) {
+    if (this.fishing === null) return;
+    const p = this.player;
+    if (p.hand?.item !== 'fishing_rod') {
+      this.fishing = null;
+      return;
+    }
+    this.fishing -= dt;
+    if (this.fishing > 0) return;
+    this.fishing = null;
+    p.hand.durability = (p.hand.durability ?? 1) - 1;
+    if (this.rng() < 0.7) {
+      this.give('fish', 1, p);
+      this.say('Клюёт! Поймана рыба');
+    } else {
+      this.say('Сорвалась…');
+    }
+    if (p.hand.durability <= 0) {
+      this.say('Удочка сломалась');
+      p.hand = null;
+    }
+    this.actionPulse = 0.3;
+  }
+
+  // ---------------- Weather ----------------
+
+  private updateWeather(dt: number) {
+    const w = this.state.weather;
+    const s = this.state;
+    const now = s.day + s.time;
+    const start = w.stormDay + w.stormAt;
+    const end = start + w.stormLength;
+    if (!w.warned && now > start - 0.05 && now < start) {
+      w.warned = true;
+      this.say('Ветер крепчает, птицы летят к берегу — надвигается шторм!');
+    }
+    let target = 0;
+    if (now >= start && now < end) {
+      // Ramp up, hold, ramp down.
+      const k = (now - start) / w.stormLength;
+      target = Math.min(1, k / 0.15, (1 - k) / 0.15);
+    }
+    const was = this.storm > 0.5;
+    this.storm += (target - this.storm) * Math.min(1, dt * 0.8);
+    if (Math.abs(target - this.storm) < 0.002) this.storm = target;
+    if (!was && this.storm > 0.5) {
+      const a = this.rng() * Math.PI * 2;
+      this.wind = { x: Math.cos(a), z: Math.sin(a) };
+      this.emit({ type: 'storm', active: true });
+    }
+    if (was && this.storm <= 0.5) {
+      this.coldWarned = false;
+      this.emit({ type: 'storm', active: false });
+      this.say('Шторм утих');
+    }
+    if (now >= end) {
+      // Schedule the next storm in 2–4 days.
+      w.stormDay = s.day + 2 + Math.floor(this.rng() * 3);
+      w.stormAt = 0.1 + this.rng() * 0.5;
+      w.stormLength = 0.14 + this.rng() * 0.06;
+      w.warned = false;
+    }
+    if (this.storm > 0.3) {
+      for (const e of s.entities) {
+        if (e.kind === 'rain_catcher') e.water = Math.min(RAIN_CATCHER_MAX, (e.water ?? 0) + dt / 12);
+      }
+    }
+  }
+
+  private nearShelter(x: number, z: number): boolean {
+    return this.state.entities.some((e) => e.kind === 'shelter' && Math.hypot(e.x - x, e.z - z) < 3);
+  }
+
+  /** Under a shelter or in the warmth of a burning fire. */
+  sheltered(x: number, z: number): boolean {
+    if (this.nearShelter(x, z)) return true;
+    return this.state.entities.some((e) => e.kind === 'campfire' && (e.fuel ?? 0) > 0 && Math.hypot(e.x - x, e.z - z) < 3);
   }
 
   // ---------------- World bookkeeping ----------------

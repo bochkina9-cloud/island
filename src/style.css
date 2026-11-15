@@ -43,6 +43,7 @@ button, input { font-family: inherit; font-size: inherit; color: inherit; }
 
 .hud { position: fixed; inset: 0; pointer-events: none; user-select: none; }
 .hud > * { pointer-events: auto; }
+.hud > .rain { position: fixed; inset: 0; pointer-events: none; }
 
 .clock { position: absolute; top: 12px; left: 12px; padding: 6px 10px 4px; text-align: center; }
 .clock svg { display: block; }

@@ -1,6 +1,6 @@
 import { type Difficulty, type EntityKind, type ItemId, ITEMS } from './data';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 export const INVENTORY_SIZE = 12;
 export const CHEST_SIZE = 9;
 
@@ -34,8 +34,10 @@ export interface Entity {
   regrowOn?: number;
   /** Campfire fuel seconds. */
   fuel?: number;
-  /** Chest contents. */
+  /** Chest or raft cargo. */
   slots?: (Slot | null)[];
+  /** Rain catcher: sips of water stored. */
+  water?: number;
   /** Animals and drops. */
   hp?: number;
   item?: Slot;
@@ -51,6 +53,17 @@ export interface PlayerState {
   inv: (Slot | null)[];
   spawnX: number;
   spawnZ: number;
+  /** Id of the raft the player is sailing, if any. */
+  onRaft?: number;
+}
+
+export interface Weather {
+  /** Day and time of day (0..1) when the next storm starts. */
+  stormDay: number;
+  stormAt: number;
+  /** Length in fractions of a day. */
+  stormLength: number;
+  warned: boolean;
 }
 
 export interface GameState {
@@ -65,6 +78,7 @@ export interface GameState {
   /** Explored map cells, base64 of a Uint8Array. */
   explored: string;
   deaths: number;
+  weather: Weather;
 }
 
 // ---------- Inventory helpers (pure, tested) ----------

@@ -1,4 +1,5 @@
 import { type GameState, SAVE_VERSION } from './state';
+import { createWorld } from './world';
 
 const DB_NAME = 'island';
 const STORE = 'saves';
@@ -51,7 +52,21 @@ export function migrate(state: GameState): GameState {
     throw new Error('Это не файл сохранения Island');
   }
   if (state.version > SAVE_VERSION) throw new Error('Сохранение сделано в более новой версии игры');
-  // Version 1 is the first format; future migrations go here, one step per version.
+  if (state.version === 1) {
+    // 0.1 had a single island; the archipelago is generated anew and the survivor keeps their things.
+    const { state: fresh } = createWorld(state.settings);
+    const p = fresh.player;
+    p.inv = state.player.inv;
+    p.hand = state.player.hand;
+    p.hp = state.player.hp;
+    p.hunger = state.player.hunger;
+    p.thirst = state.player.thirst;
+    fresh.day = state.day;
+    fresh.time = state.time;
+    fresh.deaths = state.deaths;
+    fresh.weather.stormDay = state.day + 2;
+    state = fresh;
+  }
   return state;
 }
 

@@ -3,6 +3,7 @@ import { RECIPES } from '../src/game/data';
 import { Game } from '../src/game/sim';
 import { type WorldSettings, addItem, countItem, removeItem } from '../src/game/state';
 import { MAP_SIZE, createWorld } from '../src/game/world';
+import { migrate } from '../src/game/save';
 
 const settings: WorldSettings = { seedText: 'бухта-1234', deathMode: 'soft', difficulty: 'normal', goal: 'free' };
 const still = { x: 0, z: 0 };
@@ -17,15 +18,25 @@ describe('world generation', () => {
     expect(c.entities).not.toEqual(a.entities);
   });
 
-  it('builds an island with everything needed to start', () => {
+  it('builds three separate islands, each with its own resources', () => {
     for (const seedText of ['a', 'b', 'c', 'риф-5', 'лагуна-77']) {
       const { state, terrain } = createWorld({ ...settings, seedText });
-      const kinds = new Set(state.entities.map((e) => e.kind));
-      for (const k of ['palm', 'tree', 'sapling', 'grass_tuft', 'flint_ground', 'boulder', 'berry_bush', 'pond', 'boar']) {
-        expect(kinds, `${seedText}: ${k}`).toContain(k);
+      const on = (kind: string) => new Set(state.entities.filter((e) => terrain.islandAt(e.x, e.z).kind === kind).map((e) => e.kind));
+      const home = on('home');
+      for (const k of ['palm', 'tree', 'sapling', 'grass_tuft', 'flint_ground', 'berry_bush', 'pond', 'boar']) {
+        expect(home, `${seedText} home: ${k}`).toContain(k);
       }
+      for (const k of ['tree', 'vines', 'berry_bush', 'pond', 'boar']) expect(on('forest'), `${seedText} forest: ${k}`).toContain(k);
+      for (const k of ['boulder', 'flint_ground', 'nest']) expect(on('rocky'), `${seedText} rocky: ${k}`).toContain(k);
+      expect(on('rocky')).not.toContain('pond');
+      expect(terrain.islandAt(state.player.x, state.player.z).kind).toBe('home');
       expect(terrain.walkable(state.player.x, state.player.z)).toBe(true);
-      // The island does not touch the map border.
+      // Islands are separated by sea: the straight line between centres crosses water.
+      const [a, b] = [terrain.islands[0], terrain.islands[1]];
+      let water = false;
+      for (let t = 0; t <= 1; t += 0.02) water ||= terrain.sailable(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t);
+      expect(water).toBe(true);
+      // The archipelago does not touch the map border.
       expect(terrain.walkable(1, 1)).toBe(false);
       expect(terrain.walkable(MAP_SIZE - 1, MAP_SIZE / 2)).toBe(false);
     }
@@ -50,7 +61,7 @@ describe('inventory', () => {
 describe('gameplay', () => {
   function newGame() {
     const { state, terrain } = createWorld(settings);
-    return new Game(state, terrain);
+    return new Game(state, terrain, 42);
   }
 
   /** Runs the game until the current task finishes. */
@@ -69,6 +80,8 @@ describe('gameplay', () => {
 
     const sapling = game.state.entities.filter((e) => e.kind === 'sapling')
       .sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0];
+    p.x = sapling.x + 1;
+    p.z = sapling.z;
     game.actOn(sapling.id);
     run(game, 10);
     expect(countItem(p.inv, 'twigs')).toBe(2);
@@ -91,6 +104,7 @@ describe('gameplay', () => {
 
   it('hunger and thirst fall over a day and the day counter advances', () => {
     const game = newGame();
+    game.state.entities = game.state.entities.filter((e) => e.kind !== 'boar');
     run(game, 480);
     expect(game.state.day).toBe(2);
     expect(game.state.player.thirst).toBeLessThan(10);
@@ -142,5 +156,214 @@ describe('gameplay', () => {
     expect(loaded.state.entities).toEqual(game.state.entities);
     expect(loaded.terrain.height(40, 40)).toBe(game.terrain.height(40, 40));
     expect(loaded.explored).toEqual(game.explored);
+  });
+});
+
+/** Breadth-first search over 2×2-unit sea cells from the player to water next to the given island. */
+function seaRoute(game: Game, target: 'forest' | 'rocky'): { x: number; z: number }[] {
+  const c = 2;
+  const n = MAP_SIZE / c;
+  const t = game.terrain;
+  const sea = (i: number, j: number) => t.sailable(i * c + 1, j * c + 1);
+  const goal = (i: number, j: number) => {
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = (i + di) * c + 1;
+      const z = (j + dj) * c + 1;
+      if (t.walkable(x, z) && t.islandAt(x, z).kind === target) return true;
+    }
+    return false;
+  };
+  const start = [Math.floor(game.player.x / c), Math.floor(game.player.z / c)];
+  const prev = new Int32Array(n * n).fill(-1);
+  const queue = [start[1] * n + start[0]];
+  prev[queue[0]] = queue[0];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    const i = cur % n;
+    const j = Math.floor(cur / n);
+    if (goal(i, j)) {
+      const path: { x: number; z: number }[] = [];
+      for (let k = cur; k !== prev[k]; k = prev[k]) path.unshift({ x: (k % n) * c + 1, z: Math.floor(k / n) * c + 1 });
+      return path;
+    }
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const ni = i + di;
+      const nj = j + dj;
+      if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+      const k = nj * n + ni;
+      if (prev[k] !== -1 || !sea(ni, nj)) continue;
+      prev[k] = cur;
+      queue.push(k);
+    }
+  }
+  return [];
+}
+
+describe('vertical slice', () => {
+  function newGame() {
+    const { state, terrain } = createWorld(settings);
+    return new Game(state, terrain, 42);
+  }
+  function run(game: Game, seconds: number, input = still) {
+    for (let t = 0; t < seconds; t += 0.05) game.update(0.05, input);
+  }
+  /** A point on open water right next to the player's current shore. */
+  function waterNear(game: Game) {
+    const p = game.player;
+    for (let r = 1; r < 40; r += 0.5) {
+      for (let a = 0; a < Math.PI * 2; a += 0.2) {
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        if (game.terrain.sailable(x, z)) {
+          // Stand on the last dry point before the water.
+          for (let k = r; k > 0; k -= 0.2) {
+            const lx = p.x + Math.cos(a) * k;
+            const lz = p.z + Math.sin(a) * k;
+            if (game.terrain.walkable(lx, lz)) {
+              p.x = lx;
+              p.z = lz;
+              return { x: x + Math.cos(a) * 0.5, z: z + Math.sin(a) * 0.5 };
+            }
+          }
+        }
+      }
+    }
+    throw new Error('no water');
+  }
+
+  it('sails to the forest island with cargo; saving keeps the raft', () => {
+    const game = newGame();
+    const p = game.state.player;
+    addItem(p.inv, 'wood', 8);
+    addItem(p.inv, 'rope', 4);
+    addItem(p.inv, 'paddle', 1);
+    const w = waterNear(game);
+    expect(game.place('raft', w.x, w.z)).toBe(true);
+    const raft = game.state.entities.find((e) => e.kind === 'raft')!;
+    game.actOn(raft.id);
+    run(game, 3);
+    expect(p.onRaft).toBe(raft.id);
+
+    // Plan a sea route on a coarse grid (going around the home island), then row along it.
+    const arrived = () => {
+      const spot = game.landingSpot();
+      return !!spot && game.terrain.islandAt(spot.x, spot.z).kind === 'forest';
+    };
+    const route = seaRoute(game, 'forest');
+    expect(route.length).toBeGreaterThan(0);
+    for (const wp of route) {
+      for (let t = 0; t < 20 && Math.hypot(wp.x - p.x, wp.z - p.z) > 0.8 && !arrived(); t += 0.05) {
+        const d = Math.hypot(wp.x - p.x, wp.z - p.z);
+        game.update(0.05, { x: (wp.x - p.x) / d, z: (wp.z - p.z) / d });
+      }
+      if (arrived()) break;
+    }
+    expect(arrived()).toBe(true);
+
+    // Load cargo, save mid-trip and reload.
+    addItem(raft.slots!, 'stone', 5);
+    const loaded = new Game(JSON.parse(JSON.stringify(game.snapshot())));
+    expect(loaded.player.onRaft).toBe(raft.id);
+    expect(countItem(loaded.entity(raft.id)!.slots!, 'stone')).toBe(5);
+
+    game.disembark();
+    expect(p.onRaft).toBeUndefined();
+    expect(game.terrain.walkable(p.x, p.z)).toBe(true);
+    expect(game.terrain.islandAt(p.x, p.z).kind).toBe('forest');
+  });
+
+  it('every seed lets you sail from home to both other islands', () => {
+    for (const seedText of ['a', 'b', 'риф-5', 'лагуна-77', 'бухта-1234']) {
+      const { state, terrain } = createWorld({ ...settings, seedText });
+      const game = new Game(state, terrain);
+      waterNear(game);
+      // Start the search from the water itself.
+      const w = waterNear(game);
+      game.player.x = w.x;
+      game.player.z = w.z;
+      expect(seaRoute(game, 'forest').length, seedText).toBeGreaterThan(0);
+      expect(seaRoute(game, 'rocky').length, seedText).toBeGreaterThan(0);
+    }
+  });
+
+  it('a storm warns, chills an unsheltered player and fills rain catchers', () => {
+    const game = newGame();
+    const s = game.state;
+    s.day = 3;
+    s.time = s.weather.stormAt - 0.06;
+    const messages: string[] = [];
+    game.on((e) => e.type === 'message' && messages.push(e.text));
+    const p = s.player;
+    addItem(p.inv, 'wood', 3);
+    addItem(p.inv, 'grass', 4);
+    addItem(p.inv, 'rope', 1);
+    expect(game.place('rain_catcher', p.x + 2, p.z)).toBe(true);
+    run(game, 0.08 * 480);
+    expect(messages.some((m) => m.includes('шторм'))).toBe(true);
+    expect(game.storm).toBeGreaterThan(0.5);
+    const before = p.hp;
+    p.hunger = 100;
+    p.thirst = 100;
+    run(game, 20);
+    expect(p.hp).toBeLessThan(before);
+    const catcher = s.entities.find((e) => e.kind === 'rain_catcher')!;
+    expect(catcher.water).toBeGreaterThan(1);
+    // After the storm the next one is scheduled a few days later.
+    run(game, 0.25 * 480);
+    expect(game.storm).toBeLessThan(0.1);
+    expect(s.weather.stormDay).toBeGreaterThanOrEqual(5);
+  });
+
+  it('fishing from the shore catches fish; a flask holds three sips', () => {
+    const game = newGame();
+    const p = game.state.player;
+    addItem(p.inv, 'fishing_rod', 1);
+    game.useSlot(0);
+    expect(p.hand?.item).toBe('fishing_rod');
+    waterNear(game);
+    let caught = 0;
+    for (let i = 0; i < 10; i++) {
+      expect(game.extraAction()).toBe('fish');
+      game.actNearest();
+      run(game, 9);
+      caught = countItem(p.inv, 'fish');
+    }
+    expect(caught).toBeGreaterThan(3);
+
+    addItem(p.inv, 'flask', 1);
+    const flask = p.inv.find((s) => s?.item === 'flask')!;
+    p.thirst = 10;
+    const idx = p.inv.indexOf(flask);
+    game.useSlot(idx);
+    game.useSlot(idx);
+    game.useSlot(idx);
+    game.useSlot(idx);
+    expect(flask.durability).toBe(0);
+    expect(p.thirst).toBe(85);
+  });
+
+  it('the stone axe chops twice as fast', () => {
+    const game = newGame();
+    const p = game.state.player;
+    addItem(p.inv, 'axe_stone', 1);
+    const tree = game.state.entities.find((e) => e.kind === 'tree')!;
+    p.x = tree.x + 1;
+    p.z = tree.z;
+    game.actOn(tree.id);
+    run(game, 1.6);
+    expect(tree.kind).toBe('stump');
+  });
+
+  it('migrates a 0.1 save into the archipelago keeping the inventory', () => {
+    const old = createWorld(settings).state as unknown as Record<string, unknown> & { player: { inv: unknown[] } };
+    old.version = 1;
+    delete old.weather;
+    old.player.inv[0] = { item: 'axe', count: 1, durability: 10 };
+    old.day = 4;
+    const state = migrate(old as never);
+    expect(state.version).toBe(2);
+    expect(state.day).toBe(4);
+    expect(state.player.inv[0]).toEqual({ item: 'axe', count: 1, durability: 10 });
+    expect(state.weather.stormDay).toBe(6);
   });
 });

@@ -1,6 +1,6 @@
 import { randomSeedText } from '../core/rng';
 import { DIFFICULTY, type Difficulty } from '../game/data';
-import { SLOTS, type SaveRecord, importSaveFile, listSaves } from '../game/save';
+import { SLOTS, type SaveRecord, importSaveFile, listSaves, migrate } from '../game/save';
 import type { DeathMode, GameState, GoalMode, WorldSettings } from '../game/state';
 
 export type MenuResult =
@@ -51,7 +51,14 @@ export function showMenu(error?: string): Promise<MenuResult> {
           row.innerHTML = `<div><b>Слот ${slot}</b> · день ${s.day} · «${escapeHtml(s.settings.seedText)}»
             <div class="muted small">${DIFFICULTY[s.settings.difficulty].name}, ${s.settings.deathMode === 'soft' ? 'мягко' : 'классика'} ·
             ${new Date(rec.savedAt).toLocaleString('ru-RU')}</div></div>`;
-          const play = button('Продолжить', 'btn primary', () => done({ kind: 'load', slot, state: rec.state }));
+          const play = button('Продолжить', 'btn primary', () => {
+            try {
+              done({ kind: 'load', slot, state: migrate(rec.state) });
+            } catch (e) {
+              error = e instanceof Error ? e.message : String(e);
+              home();
+            }
+          });
           const fresh = button('Новый мир', 'btn', () => setup(slot, true));
           row.append(play, fresh);
         } else {

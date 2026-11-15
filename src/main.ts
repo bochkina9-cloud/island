@@ -23,7 +23,14 @@ const HELP = `
     <li>Сделайте топор: ветки + кремень. Срубите пальму — будет дерево и, может быть, кокос.</li>
     <li>До темноты постройте костёр: ночью без света ничего не видно.</li>
     <li>Пейте из пресного пруда, ешьте ягоды; мясо кабана жарьте на костре.</li>
-  </ol>`;
+  </ol>
+  <h3>Архипелаг</h3>
+  <ul>
+    <li>За морем ещё два острова: <b>лесной</b> (лианы для верёвок, ягоды, кабаны) и <b>скалистый</b> (камень, кремень, яйца чаек — но пресной воды там нет, берите флягу).</li>
+    <li>Постройте <b>плот</b> на воде у берега, сделайте <b>весло</b> — и в путь. У плота есть трюм для груза.</li>
+    <li>Раз в несколько дней приходит <b>шторм</b>: заранее крепчает ветер. Переждите его в шалаше или у костра. Плот в море шторм может разбить.</li>
+    <li><b>Удочку</b> возьмите в руку и подойдите к воде. <b>Дождесборник</b> копит воду во время дождя.</li>
+  </ul>`;
 
 let art: Record<string, LoadedSprite>;
 
@@ -71,6 +78,7 @@ function play(choice: MenuResult): Promise<void> {
       let hovered: number | null = null;
       let pauseEl: HTMLElement | null = null;
       let ended = false;
+      let currentIsland: ReturnType<typeof game.terrain.islandAt> | null = null;
 
       const save = async (silent = false) => {
         if (game.dead) return;
@@ -142,13 +150,15 @@ function play(choice: MenuResult): Promise<void> {
 
       hud.onPlace = (r) => {
         placing = r;
-        hud.setHint(`Строим: ${r.name}. Клик — поставить, Esc или правый клик — отмена.`);
+        const where = r.id === 'raft' ? ' Плот ставится на воду у самого берега.' : '';
+        hud.setHint(`Строим: ${r.name}.${where} Клик — поставить, Esc или правый клик — отмена.`);
       };
 
       game.on((e) => {
         if (e.type === 'message') hud.toast(e.text);
         if (e.type === 'entities') view.syncEntities();
         if (e.type === 'dawn') save(true);
+        if (e.type === 'storm' && e.active) hud.toast('Шторм! Укройтесь в шалаше или у костра. В море плот может разбить.');
         if (e.type === 'death') {
           if (e.classic) {
             deleteSave(slot);
@@ -238,9 +248,21 @@ function play(choice: MenuResult): Promise<void> {
           const target = under ?? game.nearestInteractable();
           const label = target ? game.actionLabel(target) : null;
           if (label) text = under ? `Клик — ${label}` : `E — ${label}`;
+          else {
+            const extra = game.extraLabel();
+            if (extra) text = game.fishing !== null ? extra : `E — ${extra}`;
+          }
         }
         canvas.style.cursor = hovered ? 'pointer' : 'default';
-        hud.update(text);
+        hud.update(text, paused ? 0 : dt);
+        // Greet the player on arrival at another island.
+        if (game.player.onRaft === undefined) {
+          const is = game.terrain.islandAt(game.player.x, game.player.z);
+          if (is !== currentIsland) {
+            if (currentIsland) hud.toast(`Вы на острове: ${is.name}`);
+            currentIsland = is;
+          }
+        }
         view.render(paused ? 0 : dt);
         requestAnimationFrame(frame);
       };

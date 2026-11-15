@@ -1,6 +1,6 @@
 import { DUSK_START, ITEMS, type ItemId, NIGHT_START, RECIPES, type Recipe, TABS } from '../game/data';
 import type { Game } from '../game/sim';
-import { CHEST_SIZE, type Entity, type Slot, countItem } from '../game/state';
+import { type Entity, type Slot, countItem } from '../game/state';
 import { MAP_SIZE } from '../game/world';
 import { iconUrl } from '../render/art';
 
@@ -38,6 +38,8 @@ export class Hud {
   private mapCanvas: HTMLCanvasElement;
   private hint: HTMLElement;
   private tooltip: HTMLElement;
+  private rain: HTMLCanvasElement;
+  private drops: { x: number; y: number; s: number }[] = [];
   private lastInvKey = '';
   private dragFrom: number | null = null;
   /** Called when a building recipe is chosen; the main loop enters placement mode. */
@@ -46,6 +48,9 @@ export class Hud {
   constructor(private game: Game, private groundCanvas: HTMLCanvasElement) {
     this.root = el('div', 'hud');
     document.body.appendChild(this.root);
+    this.rain = el('canvas', 'rain');
+    this.root.appendChild(this.rain);
+    for (let i = 0; i < 260; i++) this.drops.push({ x: Math.random(), y: Math.random(), s: 0.6 + Math.random() * 0.8 });
 
     // Top left: clock and day.
     const clock = el('div', 'clock panel');
@@ -146,7 +151,7 @@ export class Hud {
 
     // Map window.
     this.mapPanel = el('div', 'map-panel panel hidden');
-    this.mapPanel.innerHTML = '<h2>Карта острова</h2><p class="muted">Открывается по мере исследования. M или Tab — закрыть.</p>';
+    this.mapPanel.innerHTML = '<h2>Карта архипелага</h2><p class="muted">Открывается по мере исследования. M или Tab — закрыть.</p>';
     this.mapCanvas = el('canvas');
     this.mapCanvas.width = 512;
     this.mapCanvas.height = 512;
@@ -162,9 +167,10 @@ export class Hud {
 
   // ---------------- Per frame ----------------
 
-  update(contextText: string | null) {
+  update(contextText: string | null, dt = 0) {
     const g = this.game;
     const p = g.player;
+    this.drawRain(dt);
     this.clockHand.setAttribute('transform', `rotate(${g.state.time * 360})`);
     this.dayLabel.textContent = `День ${g.state.day}`;
     for (const key of ['hp', 'hunger', 'thirst'] as const) {
@@ -264,9 +270,12 @@ export class Hud {
       this.closeChest();
       return;
     }
-    this.chestPanel.innerHTML = '<h3>Сундук</h3><p class="muted small">Клик по предмету в сундуке — забрать. Клик по слоту внизу — положить.</p>';
+    const raft = c.kind === 'raft';
+    this.chestPanel.innerHTML = `<h3>${raft ? 'Груз плота' : 'Сундук'}</h3><p class="muted small">Клик по предмету здесь — забрать. Клик по слоту внизу — положить.${raft ? ' Если шторм разобьёт плот, груз утонет.' : ''}</p>`;
     const grid = el('div', 'chest-grid');
-    for (let i = 0; i < CHEST_SIZE; i++) {
+    const size = c.slots?.length ?? 0;
+    grid.style.gridTemplateColumns = `repeat(${size}, 54px)`;
+    for (let i = 0; i < size; i++) {
       const s = el('div', 'slot');
       renderSlot(s, c.slots?.[i] ?? null);
       s.onclick = () => {
@@ -324,6 +333,25 @@ export class Hud {
         ctx.fillRect(e.x * k - 3, e.z * k - 3, 6, 6);
       }
     }
+    // Names of islands you have set foot near.
+    ctx.font = '22px Neucha, sans-serif';
+    ctx.textAlign = 'center';
+    for (const is of this.game.terrain.islands) {
+      let seen = false;
+      for (let a = 0; a < Math.PI * 2 && !seen; a += 0.5) {
+        for (const r of [0, is.r * 0.4, is.r * 0.7]) {
+          const x = Math.round(is.x + Math.cos(a) * r);
+          const z = Math.round(is.z + Math.sin(a) * r);
+          if (this.game.explored[z * MAP_SIZE + x]) seen = true;
+        }
+      }
+      if (!seen) continue;
+      ctx.fillStyle = 'rgba(244,236,216,0.85)';
+      const w = ctx.measureText(is.name).width + 12;
+      ctx.fillRect(is.x * k - w / 2, (is.z - is.r * 0.95) * k - 18, w, 24);
+      ctx.fillStyle = '#3d2b1f';
+      ctx.fillText(is.name, is.x * k, (is.z - is.r * 0.95) * k);
+    }
     const p = this.game.player;
     ctx.fillStyle = '#3d2b1f';
     ctx.beginPath();
@@ -331,6 +359,43 @@ export class Hud {
     ctx.fill();
     ctx.strokeStyle = '#f4ecd8';
     ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // ---------------- Rain ----------------
+
+  private drawRain(dt: number) {
+    const storm = this.game.storm;
+    const c = this.rain;
+    if (storm < 0.02) {
+      if (c.width) c.width = 0;
+      return;
+    }
+    if (c.width !== window.innerWidth || c.height !== window.innerHeight) {
+      c.width = window.innerWidth;
+      c.height = window.innerHeight;
+    }
+    const ctx = c.getContext('2d')!;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.strokeStyle = `rgba(210,225,240,${0.45 * storm})`;
+    ctx.lineWidth = 1.5;
+    const wind = this.game.wind.x;
+    ctx.beginPath();
+    const count = Math.floor(this.drops.length * storm);
+    for (let i = 0; i < count; i++) {
+      const d = this.drops[i];
+      d.y += dt * 1.4 * d.s;
+      d.x += dt * 0.25 * wind * d.s;
+      if (d.y > 1) {
+        d.y -= 1;
+        d.x = Math.random();
+      }
+      d.x = (d.x + 1) % 1;
+      const x = d.x * c.width;
+      const y = d.y * c.height;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + wind * 8 * d.s, y + 22 * d.s);
+    }
     ctx.stroke();
   }
 
