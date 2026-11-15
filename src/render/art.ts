@@ -123,6 +123,28 @@ const ITEM_ART: Record<string, string> = {
   rot: `<path d="M18,64 C14,44 30,30 48,32 C68,30 84,46 78,64 C72,78 26,80 18,64 Z" fill="#6b7a3a" ${S}/>
         <circle cx="38" cy="50" r="6" fill="#4a5a28"/><circle cx="60" cy="56" r="5" fill="#4a5a28"/>
         <path d="M34,26 q4,-10 0,-16 M52,24 q4,-10 0,-16 M66,28 q4,-8 0,-14" fill="none" stroke="#8a9a5a" stroke-width="2.5"/>`,
+  pot: `<path d="M16,40 h64 l-6,34 C70,86 26,86 22,74 Z" fill="#8f8a84" ${S}/>
+        <ellipse cx="48" cy="40" rx="32" ry="8" fill="#6a6560" ${S}/>
+        <path d="M22,40 C18,20 78,20 74,40" fill="none" stroke="${INK}" stroke-width="3"/>
+        <path d="M34,30 q4,-10 0,-18 M50,28 q4,-10 0,-18" fill="none" stroke="#b9b1a8" stroke-width="2.5"/>`,
+  backpack: `<path d="M24,30 C24,18 72,18 72,30 L76,84 C76,90 20,90 20,84 Z" fill="#a07a4a" ${S}/>
+        <path d="M30,48 h36 v20 h-36 Z" fill="#8a6440" ${S2}/><path d="M40,22 C40,10 56,10 56,22" fill="none" stroke="${INK}" stroke-width="4"/>
+        <path d="M26,40 l44,0" stroke="#c9a46a" stroke-width="4"/>`,
+  bow: `<path d="M30,8 C70,30 70,66 30,88" fill="none" stroke="#8a6440" stroke-width="8" stroke-linecap="round"/>
+        <path d="M30,8 C70,30 70,66 30,88" fill="none" stroke="${INK}" stroke-width="1.5"/>
+        <path d="M30,8 L30,88" stroke="#e8dcc0" stroke-width="2"/>`,
+  arrow: `<path d="M14,82 L78,18" stroke="#a07a4a" stroke-width="5" stroke-linecap="round"/>
+          <path d="M78,18 L64,22 L74,32 Z" fill="#6f7d8c" ${S2}/>
+          <path d="M14,82 l-2,-12 M14,82 l12,2 M20,76 l-2,-12 M20,76 l12,2" stroke="#f4ecd8" stroke-width="3"/>`,
+  stew: `<ellipse cx="48" cy="56" rx="36" ry="20" fill="#9a6a3a" ${S}/><ellipse cx="48" cy="50" rx="30" ry="12" fill="#a8542e" ${S2}/>
+         <circle cx="38" cy="48" r="5" fill="#d6646a"/><circle cx="56" cy="50" r="5" fill="#e0a040"/><circle cx="48" cy="44" r="4" fill="#6fae44"/>`,
+  fish_soup: `<ellipse cx="48" cy="56" rx="36" ry="20" fill="#9a6a3a" ${S}/><ellipse cx="48" cy="50" rx="30" ry="12" fill="#e8d8a8" ${S2}/>
+         <path d="M34,48 q8,-6 16,0 l6,-4 l0,8 l-6,-4 q-8,6 -16,0" fill="#7fa8c4" ${S2}/>`,
+  omelet: `<ellipse cx="48" cy="56" rx="38" ry="18" fill="#e8e0d0" ${S}/><path d="M18,54 C24,36 72,36 78,54 C70,64 26,64 18,54 Z" fill="#f2c64a" ${S2}/>`,
+  kissel: `<path d="M26,30 h44 l-6,54 h-32 Z" fill="#c23b6a" ${S}/><ellipse cx="48" cy="30" rx="22" ry="5" fill="#e06a90" ${S2}/>
+           <circle cx="42" cy="50" r="4" fill="#fff" opacity="0.5"/>`,
+  soup: `<ellipse cx="48" cy="56" rx="36" ry="20" fill="#9a6a3a" ${S}/><ellipse cx="48" cy="50" rx="30" ry="12" fill="#c9a46a" ${S2}/>
+         <circle cx="40" cy="48" r="4" fill="#6fae44"/><circle cx="54" cy="50" r="4" fill="#c23b4a"/>`,
   axe_stone: `<rect x="44" y="18" width="9" height="66" rx="4" fill="#8a6440" ${S} transform="rotate(30 48 50)"/>
         <path d="M40,18 C56,8 78,16 78,32 C66,34 56,40 50,48 Z" fill="#8f8a84" ${S}/>
         <path d="M44,30 l10,6 M48,24 l10,6" stroke="#c9a46a" stroke-width="4"/>`,
@@ -300,6 +322,28 @@ export const SPRITES: Record<string, SpriteDef> = {
     body: `${[[20, 70], [44, 80], [80, 84], [116, 80], [140, 70], [130, 52], [100, 44], [60, 44], [28, 52]].map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="15" ry="9" fill="#9a958d" ${S2}/>`).join('')}
            <ellipse cx="80" cy="64" rx="56" ry="16" fill="#f4f1ea" ${S2}/>
            <path d="M50,60 l6,-4 M70,66 l6,-4 M92,58 l6,-4 M110,64 l6,-4" stroke="#c9c2b4" stroke-width="2.5"/>`,
+  },
+  cellar: {
+    w: 140, h: 90, size: 1.6,
+    body: `<ellipse cx="70" cy="62" rx="62" ry="24" fill="#8f8a84" ${S}/>
+           <path d="M24,58 L70,30 L116,58 L70,80 Z" fill="#9a6a3a" ${S}/>
+           <path d="M47,44 L93,70 M58,37 L104,64 M36,51 L82,76" stroke="#7a5432" stroke-width="3"/>
+           <circle cx="76" cy="54" r="5" fill="#d9b24a" ${S2}/>`,
+  },
+  hut: {
+    w: 260, h: 220, size: 3.6,
+    body: `<path d="M40,210 L40,110 L220,110 L220,210 Z" fill="#a8783f" ${S}/>
+           ${Array.from({ length: 6 }, (_, i) => `<path d="M40,${126 + i * 16} h180" stroke="#8a6440" stroke-width="3"/>`).join('')}
+           <path d="M14,118 L130,24 L246,118 Z" fill="#c9a46a" ${S}/>
+           ${Array.from({ length: 8 }, (_, i) => `<path d="M${40 + i * 25},${110 - (i < 4 ? i : 7 - i) * 8} L130,30" stroke="#a8864a" stroke-width="2.5"/>`).join('')}
+           <path d="M108,210 L108,150 L152,150 L152,210 Z" fill="#5a3a24" ${S2}/>
+           <rect x="58" y="140" width="32" height="28" fill="#3a2a1a" ${S2}/><rect x="172" y="140" width="32" height="28" fill="#3a2a1a" ${S2}/>
+           <path d="M74,140 v28 M58,154 h32 M188,140 v28 M172,154 h32" stroke="#a8783f" stroke-width="3"/>`,
+  },
+  bobber: {
+    w: 40, h: 50, size: 0.4,
+    body: `<path d="M20,4 v12" stroke="${INK}" stroke-width="2"/><circle cx="20" cy="26" r="12" fill="#f4f1ea" ${S2}/>
+           <path d="M8,26 a12,12 0 0 1 24,0 Z" fill="#d84a4a" ${S2}/>`,
   },
   boar_0: boar(0),
   boar_1: boar(1),

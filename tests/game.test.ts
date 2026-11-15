@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RECIPES, seasonOf } from '../src/game/data';
+import { FLAMMABLE, RECIPES, potDish, seasonOf } from '../src/game/data';
 import { Game } from '../src/game/sim';
 import { type WorldSettings, addItem, countItem, removeItem } from '../src/game/state';
 import { MAP_SIZE, createWorld } from '../src/game/world';
@@ -361,7 +361,7 @@ describe('vertical slice', () => {
     old.player.inv[0] = { item: 'axe', count: 1, durability: 10 };
     old.day = 4;
     const state = migrate(old as never);
-    expect(state.version).toBe(3);
+    expect(state.version).toBe(4);
     expect(state.day).toBe(4);
     expect(state.player.inv[0]).toEqual({ item: 'axe', count: 1, durability: 10 });
     expect(state.weather.stormDay).toBe(6);
@@ -510,5 +510,188 @@ describe('seasons, spoilage, salt and fire', () => {
     }
     expect(rained).toBe(true);
     expect(game.state.entities.find((e) => e.kind === 'rain_catcher')!.water).toBeGreaterThan(1);
+  });
+});
+
+describe('0.4: pot, backpack, fuel, bow, cellar, hut, fishing', () => {
+  function newGame() {
+    const { state, terrain } = createWorld(settings);
+    state.entities = state.entities.filter((e) => e.kind !== 'boar');
+    return new Game(state, terrain, 11);
+  }
+  function run(game: Game, seconds: number) {
+    for (let t = 0; t < seconds; t += 0.05) game.update(0.05, still);
+  }
+  function fireHere(game: Game) {
+    const p = game.player;
+    addItem(p.inv, 'wood', 2);
+    addItem(p.inv, 'grass', 3);
+    for (let a = 0; a < 6.28; a += 0.4) {
+      if (game.place('campfire', p.x + Math.cos(a) * 1.6, p.z + Math.sin(a) * 1.6)) break;
+    }
+    return game.state.entities.find((e) => e.kind === 'campfire')!;
+  }
+
+  it('the pot turns three ingredients into a dish by simple rules', () => {
+    expect(potDish(['meat', 'berries', 'berries'])).toBe('stew');
+    expect(potDish(['fish', 'egg', 'coconut'])).toBe('fish_soup');
+    expect(potDish(['egg', 'egg', 'berries'])).toBe('omelet');
+    expect(potDish(['berries', 'berries', 'coconut'])).toBe('kissel');
+    expect(potDish(['berries', 'egg', 'coconut'])).toBe('soup');
+    expect(potDish(['meat', 'rot', 'fish'])).toBe('rot');
+    const game = newGame();
+    const p = game.player;
+    fireHere(game);
+    p.inv.fill(null);
+    addItem(p.inv, 'pot', 1);
+    addItem(p.inv, 'meat', 1);
+    addItem(p.inv, 'berries', 2);
+    let opened = false;
+    game.openPot = () => (opened = true);
+    game.useSlot(0);
+    expect(opened).toBe(true);
+    expect(game.cook([1, 2, 2])).toBe('stew');
+    expect(countItem(p.inv, 'meat')).toBe(0);
+    expect(countItem(p.inv, 'berries')).toBe(0);
+    expect(countItem(p.inv, 'stew')).toBe(1);
+    expect(game.cook([1, 1, 1])).toBeNull(); // not enough left
+  });
+
+  it('a click on fuel at the fire throws in exactly that fuel', () => {
+    const game = newGame();
+    const p = game.player;
+    const fire = fireHere(game);
+    fire.fuel = 10;
+    addItem(p.inv, 'wood', 3);
+    addItem(p.inv, 'grass', 5);
+    const woodSlot = p.inv.findIndex((s) => s?.item === 'wood');
+    game.useSlot(woodSlot);
+    expect(fire.fuel).toBe(70);
+    expect(countItem(p.inv, 'wood')).toBe(2);
+    expect(countItem(p.inv, 'grass')).toBe(5);
+  });
+
+  it('the backpack adds six slots and survives a soft death', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'backpack', 1);
+    game.useSlot(p.inv.findIndex((s) => s?.item === 'backpack'));
+    expect(p.backpack).toBe(true);
+    expect(p.inv.length).toBe(18);
+    expect(addItem(p.inv, 'stone', 20 * 17)).toBe(0);
+    p.hp = 0.01;
+    p.hunger = 0;
+    run(game, 0.2);
+    expect(p.inv.length).toBe(18);
+    expect(p.backpack).toBe(true);
+  });
+
+  it('the bow hits a boar from a distance and uses arrows', () => {
+    const { state, terrain } = createWorld(settings);
+    const game = new Game(state, terrain, 3);
+    const p = game.player;
+    const boar = state.entities.find((e) => e.kind === 'boar')!;
+    addItem(p.inv, 'bow', 1);
+    addItem(p.inv, 'arrow', 8);
+    game.useSlot(p.inv.findIndex((s) => s?.item === 'bow'));
+    // Stand 6 m away on walkable ground.
+    for (let a = 0; a < 6.28; a += 0.2) {
+      const x = boar.x + Math.cos(a) * 6;
+      const z = boar.z + Math.sin(a) * 6;
+      if (terrain.walkable(x, z)) {
+        p.x = x;
+        p.z = z;
+        break;
+      }
+    }
+    const from = { x: p.x, z: p.z };
+    game.actOn(boar.id);
+    run(game, 1.2);
+    expect(countItem(p.inv, 'arrow')).toBe(7);
+    expect(Math.hypot(p.x - from.x, p.z - from.z)).toBeLessThan(0.5); // shot from where it stood
+    for (let i = 0; i < 6 && game.entity(boar.id); i++) {
+      game.actOn(boar.id);
+      run(game, 1.2);
+    }
+    expect(game.entity(boar.id)).toBeUndefined();
+  });
+
+  it('food keeps much longer in a cellar than in a chest', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'wood', 8);
+    addItem(p.inv, 'stone', 6);
+    addItem(p.inv, 'rope', 3);
+    expect(game.place('chest', p.x + 1.6, p.z)).toBe(true);
+    expect(game.place('cellar', p.x - 1.8, p.z)).toBe(true);
+    const chest = game.state.entities.find((e) => e.kind === 'chest')!;
+    const cellar = game.state.entities.find((e) => e.kind === 'cellar')!;
+    expect(cellar.slots!.length).toBe(12);
+    addItem(chest.slots!, 'fish', 1);
+    addItem(cellar.slots!, 'fish', 1);
+    for (let t = 0; t < 480; t += 1) {
+      p.hunger = 100;
+      p.thirst = 100;
+      run(game, 1);
+    }
+    const inCellar = cellar.slots!.find((s) => s?.item === 'fish')!.fresh!;
+    const inChest = chest.slots!.find((s) => s?.item === 'fish')!.fresh!;
+    expect(1 - inCellar).toBeLessThan((1 - inChest) * 0.4);
+  });
+
+  it('a hut fully protects from storm cold, a shelter only partly, and the hut does not burn', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'wood', 16);
+    addItem(p.inv, 'stone', 6);
+    addItem(p.inv, 'rope', 6);
+    addItem(p.inv, 'grass', 6);
+    let built = false;
+    for (let r = 2.5; r < 6 && !built; r += 0.5) {
+      for (let a = 0; a < 6.28 && !built; a += 0.3) built = game.place('hut', p.x + Math.cos(a) * r, p.z + Math.sin(a) * r);
+    }
+    expect(built).toBe(true);
+    const hut = game.state.entities.find((e) => e.kind === 'hut')!;
+    expect(game.cover(hut.x, hut.z + 1.8)).toBe(1);
+    expect(p.spawnX).toBe(hut.x);
+    expect(FLAMMABLE.has('hut')).toBe(false);
+    let sheltered = false;
+    for (let r = 2; r < 6 && !sheltered; r += 0.5) {
+      for (let a = 0; a < 6.28 && !sheltered; a += 0.3) {
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        if (Math.hypot(x - hut.x, z - hut.z) > 6) sheltered = game.place('shelter', x, z);
+      }
+    }
+    expect(sheltered).toBe(true);
+    const shelter = game.state.entities.find((e) => e.kind === 'shelter')!;
+    expect(game.cover(shelter.x, shelter.z + 1)).toBeCloseTo(0.6);
+  });
+
+  it('with a rod in hand by the water, E casts even when objects are nearby', () => {
+    const game = newGame();
+    const p = game.player;
+    addItem(p.inv, 'fishing_rod', 1);
+    game.useSlot(p.inv.findIndex((s) => s?.item === 'fishing_rod'));
+    // Walk to the shoreline.
+    for (let r = 1; r < 40; r += 0.5) {
+      let done = false;
+      for (let a = 0; a < 6.28 && !done; a += 0.2) {
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        if (game.terrain.walkable(x, z) && game.nearWaterAt(x, z)) {
+          p.x = x;
+          p.z = z;
+          done = true;
+        }
+      }
+      if (done) break;
+    }
+    // Put a flint right next to the player: it must not steal the action.
+    game.state.entities.push({ id: 99999, kind: 'flint_ground', x: p.x + 0.5, z: p.z });
+    game.actNearest();
+    expect(game.fishing).not.toBeNull();
+    expect(game.bobber).not.toBeNull();
+    expect(game.terrain.sailable(game.bobber!.x, game.bobber!.z)).toBe(true);
   });
 });

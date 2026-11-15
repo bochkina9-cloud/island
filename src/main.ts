@@ -29,13 +29,20 @@ const HELP = `
     <li>За морем ещё два острова: <b>лесной</b> (лианы для верёвок, ягоды, кабаны) и <b>скалистый</b> (камень, кремень, яйца чаек — но пресной воды там нет, берите флягу).</li>
     <li>Постройте <b>плот</b> на воде у берега, сделайте <b>весло</b> — и в путь. У плота есть трюм для груза.</li>
     <li>Раз в несколько дней приходит <b>шторм</b>: заранее крепчает ветер. Переждите его в шалаше или у костра. Плот в море шторм может разбить.</li>
-    <li><b>Удочку</b> возьмите в руку и подойдите к воде. <b>Дождесборник</b> копит воду во время дождя.</li>
+    <li><b>Рыбалка:</b> возьмите удочку в руку (клик по слоту), подойдите к воде и нажмите E — или просто кликните по воде. Ждите, пока поплавок не дёрнется. <b>Дождесборник</b> копит воду во время дождя.</li>
   </ul>
   <h3>Сезоны</h3>
   <ul>
     <li><b>Сухой сезон</b> (7 дней): дождей нет, пить хочется чаще, трава желтеет и <b>может загореться от костра</b> — разводите огонь на песке или потушите пожар водой из фляги. Солеварня на берегу даёт соль.</li>
     <li><b>Сезон дождей</b> (7 дней): частые ливни и штормы, костры гаснут быстрее, еда портится быстрее, дождесборники полны.</li>
     <li>Еда <b>портится</b>: полоска под предметом — свежесть. В сундуке медленнее. <b>Соль + мясо или рыба</b> — солонина, она почти не портится.</li>
+  </ul>
+  <h3>Лагерь</h3>
+  <ul>
+    <li><b>Топливо:</b> стоя у костра, кликните по дереву, веткам или траве в слоте — в огонь пойдёт именно это.</li>
+    <li><b>Котелок:</b> у горящего костра кликните по котелку и выберите 3 продукта: мясо → рагу, рыба → уха, 2 яйца → омлет, 3 фрукта → кисель.</li>
+    <li><b>Рюкзак</b> даёт ещё 6 мест. <b>Погреб</b> хранит еду почти в 7 раз дольше. <b>Хижина</b> полностью укрывает от шторма и не горит.</li>
+    <li><b>Лук:</b> возьмите в руку и кликните по кабану издалека; стрелы иногда можно подобрать.</li>
   </ul>`;
 
 let art: Record<string, LoadedSprite>;
@@ -149,6 +156,7 @@ function play(choice: MenuResult): Promise<void> {
         escape: () => {
           if (placing) return stopPlacing();
           if (hud.mapOpen) return hud.toggleMap();
+          if (hud.potOpen) return hud.closePot();
           if (hud.chestOpen) return hud.closeChest();
           setPaused(!paused);
         },
@@ -202,7 +210,9 @@ function play(choice: MenuResult): Promise<void> {
         if (e) game.actOn(e.id);
         else {
           const p = view.groundAt(ev.clientX, ev.clientY);
-          if (p) game.moveTo(p.x, p.z);
+          // With a rod in hand, a click on water means "go and fish there".
+          if (p && game.player.hand?.item === 'fishing_rod' && game.terrain.sailable(p.x, p.z) && game.player.onRaft === undefined) game.fishAt(p.x, p.z);
+          else if (p) game.moveTo(p.x, p.z);
         }
       });
       canvas.addEventListener('wheel', (ev) => {
@@ -251,12 +261,14 @@ function play(choice: MenuResult): Promise<void> {
         } else {
           const under = view.entityAt(mouse.x, mouse.y);
           hovered = under?.id ?? null;
-          const target = under ?? game.nearestInteractable();
+          const fishFirst = game.player.hand?.item === 'fishing_rod' && (game.extraAction() === 'fish' || game.fishing !== null);
+          const target = under ?? (fishFirst ? null : game.nearestInteractable());
           const label = target ? game.actionLabel(target) : null;
           if (label) text = under ? `Клик — ${label}` : `E — ${label}`;
           else {
             const extra = game.extraLabel();
             if (extra) text = game.fishing !== null ? extra : `E — ${extra}`;
+            else if (game.player.hand?.item === 'fishing_rod') text = 'Удочка в руке: кликните по воде или подойдите к берегу';
           }
         }
         canvas.style.cursor = hovered ? 'pointer' : 'default';

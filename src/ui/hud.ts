@@ -1,4 +1,4 @@
-import { DUSK_START, ITEMS, type ItemId, NIGHT_START, RECIPES, type Recipe, SEASONS, TABS, seasonDaysLeft } from '../game/data';
+import { DUSK_START, ITEMS, type ItemId, NIGHT_START, RECIPES, type Recipe, SEASONS, TABS, isIngredient, potDish, seasonDaysLeft } from '../game/data';
 import type { Game } from '../game/sim';
 import { type Entity, type Slot, countItem, freshness } from '../game/state';
 import { MAP_SIZE } from '../game/world';
@@ -34,6 +34,14 @@ export class Hud {
   private craftPanel: HTMLElement;
   private openTab: Recipe['tab'] | null = null;
   private chestPanel: HTMLElement;
+  private packRow!: HTMLElement;
+  private potPanel: HTMLElement;
+  /** Inventory slots chosen for the pot (a slot may appear several times). */
+  private potPick: number[] = [];
+  private minimap: HTMLCanvasElement;
+  private fog: HTMLCanvasElement;
+  private minimapCd = 0;
+  private fogCd = 0;
   private chest: Entity | null = null;
   private mapPanel: HTMLElement;
   private mapCanvas: HTMLCanvasElement;
@@ -115,31 +123,10 @@ export class Hud {
     this.hotbar = el('div', 'hotbar panel');
     this.hotbar.appendChild(this.handSlot);
     this.hotbar.appendChild(el('div', 'divider'));
-    game.player.inv.forEach((_, i) => {
-      const s = el('div', 'slot');
-      s.dataset.i = String(i);
-      s.draggable = true;
-      s.onclick = () => {
-        if (this.chest) game.chestPut(this.chest, i);
-        else game.useSlot(i);
-        this.refreshAll();
-      };
-      s.oncontextmenu = (e) => {
-        e.preventDefault();
-        game.dropSlot(i);
-      };
-      s.ondragstart = () => (this.dragFrom = i);
-      s.ondragover = (e) => e.preventDefault();
-      s.ondrop = (e) => {
-        e.preventDefault();
-        if (this.dragFrom !== null && this.dragFrom !== i) game.moveSlot(this.dragFrom, i);
-        this.dragFrom = null;
-      };
-      s.onmouseenter = () => this.showTooltip(s, game.player.inv[i]);
-      s.onmouseleave = () => this.hideTooltip();
-      this.hotbar.appendChild(s);
-    });
-    bottom.append(this.toasts, this.context, this.hotbar);
+    for (let i = 0; i < Math.min(12, game.player.inv.length); i++) this.hotbar.appendChild(this.makeSlot(i));
+    this.packRow = el('div', 'hotbar pack panel hidden');
+    this.packRow.title = 'Рюкзак';
+    bottom.append(this.toasts, this.context, this.packRow, this.hotbar);
     this.root.appendChild(bottom);
 
     this.hint = el('div', 'hint hidden');
@@ -151,6 +138,22 @@ export class Hud {
     this.chestPanel = el('div', 'chest-panel panel hidden');
     this.root.appendChild(this.chestPanel);
     game.openChest = (e) => this.openChest(e);
+
+    // Cooking pot window.
+    this.potPanel = el('div', 'chest-panel pot-panel panel hidden');
+    this.root.appendChild(this.potPanel);
+    game.openPot = () => this.openPot();
+
+    // Minimap under the stats; a click opens the big map.
+    this.minimap = el('canvas', 'minimap panel');
+    this.minimap.width = 170;
+    this.minimap.height = 170;
+    this.minimap.title = 'Миникарта (клик — большая карта)';
+    this.minimap.onclick = () => this.toggleMap();
+    this.root.appendChild(this.minimap);
+    this.fog = el('canvas');
+    this.fog.width = MAP_SIZE;
+    this.fog.height = MAP_SIZE;
 
     // Map window.
     this.mapPanel = el('div', 'map-panel panel hidden');
@@ -174,6 +177,16 @@ export class Hud {
     const g = this.game;
     const p = g.player;
     this.drawRain(dt);
+    this.fogCd -= dt;
+    if (this.fogCd <= 0) {
+      this.fogCd = 1;
+      this.updateFog();
+    }
+    this.minimapCd -= dt;
+    if (this.minimapCd <= 0) {
+      this.minimapCd = 0.2;
+      this.drawMinimap();
+    }
     this.clockHand.setAttribute('transform', `rotate(${g.state.time * 360})`);
     this.dayLabel.textContent = `День ${g.state.day}`;
     const left = seasonDaysLeft(g.state.day);
@@ -193,19 +206,52 @@ export class Hud {
       this.context.classList.add('hidden');
     }
     // Rebuild slots only when the inventory changed.
-    const key = JSON.stringify([p.inv, p.hand, this.chest?.slots], (_, v) => (typeof v === 'number' ? Math.ceil(v) : v));
+    const key = JSON.stringify([p.inv, p.hand, this.chest?.slots, this.potPick], (_, v) => (typeof v === 'number' ? Math.ceil(v * 10) : v));
     if (key !== this.lastInvKey) {
       this.lastInvKey = key;
       this.refreshAll();
     }
   }
 
+  /** One inventory slot: click uses (or puts into an open chest / pot), right click drops, drag swaps. */
+  private makeSlot(i: number): HTMLElement {
+    const game = this.game;
+    const s = el('div', 'slot');
+    s.dataset.i = String(i);
+    s.draggable = true;
+    s.onclick = () => {
+      if (!this.potPanel.classList.contains('hidden')) this.addToPot(i);
+      else if (this.chest) game.chestPut(this.chest, i);
+      else game.useSlot(i);
+      this.refreshAll();
+    };
+    s.oncontextmenu = (e) => {
+      e.preventDefault();
+      game.dropSlot(i);
+    };
+    s.ondragstart = () => (this.dragFrom = i);
+    s.ondragover = (e) => e.preventDefault();
+    s.ondrop = (e) => {
+      e.preventDefault();
+      if (this.dragFrom !== null && this.dragFrom !== i) game.moveSlot(this.dragFrom, i);
+      this.dragFrom = null;
+    };
+    s.onmouseenter = () => this.showTooltip(s, game.player.inv[i]);
+    s.onmouseleave = () => this.hideTooltip();
+    return s;
+  }
+
   refreshAll() {
     const p = this.game.player;
+    // Backpack slots live in a second row above the main bar.
+    const packSlots = this.packRow.querySelectorAll('.slot').length;
+    for (let i = 12 + packSlots; i < p.inv.length; i++) this.packRow.appendChild(this.makeSlot(i));
+    this.packRow.classList.toggle('hidden', p.inv.length <= 12);
     renderSlot(this.handSlot, p.hand);
-    this.hotbar.querySelectorAll<HTMLElement>('.slot[data-i]').forEach((s) => {
+    this.root.querySelectorAll<HTMLElement>('.bottom .slot[data-i]').forEach((s) => {
       const i = Number(s.dataset.i);
-      renderSlot(s, p.inv[i], HOTKEYS[i]);
+      renderSlot(s, p.inv[i] ?? null, HOTKEYS[i]);
+      s.classList.toggle('picked', this.potPick.includes(i));
     });
     this.craftTabs.querySelectorAll<HTMLElement>('.tab').forEach((t) => {
       const can = RECIPES.some((r) => r.tab === t.dataset.tab && this.game.canCraft(r));
@@ -230,7 +276,8 @@ export class Hud {
     this.craftPanel.innerHTML = `<h3>${tab.name}</h3>`;
     for (const r of RECIPES.filter((q) => q.tab === this.openTab)) {
       const can = this.game.canCraft(r);
-      const icon = 'item' in r.makes ? r.makes.item : { campfire: 'wood', chest: 'rope', shelter: 'grass', rain_catcher: 'flask', raft: 'paddle', salt_pan: 'salt' }[r.makes.structure];
+      const icons: Record<string, string> = { campfire: 'wood', chest: 'rope', shelter: 'grass', rain_catcher: 'flask', raft: 'paddle', salt_pan: 'salt', cellar: 'stone', hut: 'wood' };
+      const icon = 'item' in r.makes ? r.makes.item : icons[r.makes.structure] ?? 'wood';
       const row = el('div', `recipe ${can ? 'can' : ''}`);
       const needs = Object.entries(r.needs).map(([id, n]) => {
         const have = countItem(this.game.player.inv, id as ItemId);
@@ -277,10 +324,12 @@ export class Hud {
       return;
     }
     const raft = c.kind === 'raft';
-    this.chestPanel.innerHTML = `<h3>${raft ? 'Груз плота' : 'Сундук'}</h3><p class="muted small">Клик по предмету здесь — забрать. Клик по слоту внизу — положить.${raft ? ' Если шторм разобьёт плот, груз утонет.' : ''}</p>`;
+    const title = raft ? 'Груз плота' : c.kind === 'cellar' ? 'Погреб' : 'Сундук';
+    const note = raft ? ' Если шторм разобьёт плот, груз утонет.' : c.kind === 'cellar' ? ' Еда здесь портится почти в 7 раз медленнее.' : ' Еда здесь портится вдвое медленнее.';
+    this.chestPanel.innerHTML = `<h3>${title}</h3><p class="muted small">Клик по предмету здесь — забрать. Клик по слоту внизу — положить.${note}</p>`;
     const grid = el('div', 'chest-grid');
     const size = c.slots?.length ?? 0;
-    grid.style.gridTemplateColumns = `repeat(${size}, 54px)`;
+    grid.style.gridTemplateColumns = `repeat(${Math.min(size, 9)}, 54px)`;
     for (let i = 0; i < size; i++) {
       const s = el('div', 'slot');
       renderSlot(s, c.slots?.[i] ?? null);
@@ -294,6 +343,125 @@ export class Hud {
     close.onclick = () => this.closeChest();
     this.chestPanel.append(grid, close);
   }
+
+  // ---------------- Cooking pot ----------------
+
+  openPot() {
+    this.closeChest();
+    this.potPick = [];
+    this.potPanel.classList.remove('hidden');
+    this.renderPot();
+  }
+
+  closePot() {
+    this.potPick = [];
+    this.potPanel.classList.add('hidden');
+    this.refreshAll();
+  }
+
+  get potOpen() {
+    return !this.potPanel.classList.contains('hidden');
+  }
+
+  private addToPot(i: number) {
+    const s = this.game.player.inv[i];
+    if (!s || !isIngredient(s.item) || this.potPick.length >= 3) return;
+    if (this.potPick.filter((x) => x === i).length >= s.count) return;
+    this.potPick.push(i);
+    this.renderPot();
+  }
+
+  private renderPot() {
+    const inv = this.game.player.inv;
+    const picked = this.potPick.map((i) => inv[i]?.item).filter((x): x is ItemId => !!x);
+    const dish = picked.length === 3 ? potDish(picked) : null;
+    this.potPanel.innerHTML = `<h3>Котелок</h3>
+      <p class="muted small">Клик по еде в инвентаре — положить в котелок (нужно 3 продукта). Мясо → рагу, рыба → уха, 2 яйца → омлет, 3 фрукта → кисель, остальное → похлёбка.</p>`;
+    const grid = el('div', 'chest-grid');
+    grid.style.gridTemplateColumns = 'repeat(3, 54px)';
+    for (let k = 0; k < 3; k++) {
+      const cell = el('div', 'slot');
+      const item = picked[k];
+      if (item) cell.innerHTML = `<img src="${iconUrl(item)}" alt="${ITEMS[item].name}">`;
+      cell.onclick = () => {
+        this.potPick.splice(k, 1);
+        this.renderPot();
+      };
+      grid.appendChild(cell);
+    }
+    const result = el('div', 'pot-result', dish ? `Получится: <b>${ITEMS[dish].name}</b> <img src="${iconUrl(dish)}" alt="">` : '&nbsp;');
+    const row = el('div', 'row');
+    const close = el('button', 'btn', 'Закрыть');
+    close.onclick = () => this.closePot();
+    const cook = el('button', 'btn primary', 'Варить');
+    cook.disabled = !dish;
+    cook.onclick = () => {
+      if (this.game.cook(this.potPick)) this.potPick = [];
+      this.renderPot();
+      this.refreshAll();
+    };
+    row.append(close, cook);
+    this.potPanel.append(grid, result, row);
+  }
+
+  // ---------------- Minimap ----------------
+
+  private updateFog() {
+    const f = this.fog.getContext('2d')!;
+    const img = f.createImageData(MAP_SIZE, MAP_SIZE);
+    const ex = this.game.explored;
+    for (let i = 0; i < ex.length; i++) img.data[i * 4 + 3] = ex[i] ? 255 : 0;
+    f.putImageData(img, 0, 0);
+  }
+
+  private drawMinimap() {
+    const c = this.minimap;
+    const ctx = c.getContext('2d')!;
+    const p = this.game.player;
+    const R = 32; // world units from the centre to the edge
+    const s = c.width;
+    const k = s / (R * 2);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#d9c9a3';
+    ctx.fillRect(0, 0, s, s);
+    // Explored land and sea, cut out by the fog of war.
+    const layer = (this.minimapLayer ??= el('canvas'));
+    layer.width = s;
+    layer.height = s;
+    const l = layer.getContext('2d')!;
+    l.fillStyle = '#6fb7c4';
+    l.fillRect(0, 0, s, s);
+    const g = this.groundCanvas;
+    const px = g.width / MAP_SIZE;
+    l.drawImage(g, (p.x - R) * px, (p.z - R) * px, R * 2 * px, R * 2 * px, 0, 0, s, s);
+    l.globalCompositeOperation = 'destination-in';
+    l.drawImage(this.fog, p.x - R, p.z - R, R * 2, R * 2, 0, 0, s, s);
+    ctx.drawImage(layer, 0, 0);
+    // Camp buildings and nearby animals.
+    for (const e of this.game.state.entities) {
+      const dx = (e.x - p.x) * k + s / 2;
+      const dz = (e.z - p.z) * k + s / 2;
+      if (dx < 0 || dz < 0 || dx > s || dz > s) continue;
+      if (['campfire', 'shelter', 'hut', 'chest', 'cellar', 'raft', 'salt_pan', 'rain_catcher'].includes(e.kind)) {
+        ctx.fillStyle = e.kind === 'raft' ? '#7a5432' : '#b5482e';
+        ctx.fillRect(dx - 3, dz - 3, 6, 6);
+      } else if (e.kind === 'boar' && Math.hypot(e.x - p.x, e.z - p.z) < 14) {
+        ctx.fillStyle = '#5a4232';
+        ctx.beginPath();
+        ctx.arc(dx, dz, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.fillStyle = '#3d2b1f';
+    ctx.beginPath();
+    ctx.arc(s / 2, s / 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#f4ecd8';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  private minimapLayer?: HTMLCanvasElement;
 
   // ---------------- Map ----------------
 

@@ -1,6 +1,6 @@
 import { type Difficulty, type EntityKind, type ItemId, ITEMS } from './data';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 export const INVENTORY_SIZE = 12;
 export const CHEST_SIZE = 9;
 
@@ -61,6 +61,8 @@ export interface PlayerState {
   spawnZ: number;
   /** Id of the raft the player is sailing, if any. */
   onRaft?: number;
+  /** Wears a backpack: the inventory has extra slots. */
+  backpack?: boolean;
 }
 
 export interface Weather {

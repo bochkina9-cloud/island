@@ -156,6 +156,9 @@ export class WorldView {
   private player: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; shadow: THREE.Mesh; tool: THREE.Mesh; toolMat: THREE.ShaderMaterial };
   private ghost: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; key: string } | null = null;
   private shadowMat: THREE.ShaderMaterial;
+  private bobber!: THREE.Mesh;
+  private fishLine!: THREE.Line;
+  private arrows: THREE.Mesh[] = [];
   private heightTex!: THREE.DataTexture;
   private clock = 0;
   zoom = 26;
@@ -195,6 +198,18 @@ export class WorldView {
     tool.visible = false;
     this.player = { mesh: pmesh, mat: pm, shadow: this.makeShadow(0.9), tool, toolMat };
     this.scene.add(pmesh, tool, this.player.shadow);
+
+    // Fishing float and line.
+    const bm = this.spriteMaterial('bobber');
+    this.bobber = new THREE.Mesh(this.geometry('bobber'), bm);
+    this.bobber.rotation.x = -PITCH;
+    this.bobber.visible = false;
+    this.fishLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color: 0x3d2b1f }),
+    );
+    this.fishLine.visible = false;
+    this.scene.add(this.bobber, this.fishLine);
     this.syncEntities();
   }
 
@@ -432,6 +447,39 @@ export class WorldView {
       this.player.tool.scale.set(g.facing, 1, 1);
       this.player.tool.rotation.set(-PITCH, 0, -g.facing * swing);
     }
+
+    // Fishing: the float bobs, and dips when a fish bites.
+    const float = g.bobber;
+    this.bobber.visible = this.fishLine.visible = !!float;
+    if (float) {
+      const dip = g.biting ? -0.12 + Math.sin(this.clock * 30) * 0.06 : Math.sin(this.clock * 3) * 0.03;
+      this.bobber.position.set(float.x, dip, float.z);
+      const tip = new THREE.Vector3(p.x + g.facing * 0.9, 1.6 + (sailing ? 0.28 : 0), p.z + 0.1);
+      const pos = this.fishLine.geometry.attributes.position as THREE.BufferAttribute;
+      pos.setXYZ(0, tip.x, tip.y, tip.z);
+      pos.setXYZ(1, float.x, 0.25 + dip, float.z);
+      pos.needsUpdate = true;
+    }
+
+    // Arrows in flight follow a low arc.
+    while (this.arrows.length < g.projectiles.length) {
+      const m = new THREE.Mesh(this.geometry('item_arrow', 1.1), this.spriteMaterial('item_arrow'));
+      m.rotation.x = -PITCH;
+      this.scene.add(m);
+      this.arrows.push(m);
+    }
+    this.arrows.forEach((m, i) => {
+      const pr = g.projectiles[i];
+      m.visible = !!pr;
+      if (!pr) return;
+      const k = pr.t / pr.dur;
+      const x = pr.x0 + (pr.x1 - pr.x0) * k;
+      const z = pr.z0 + (pr.z1 - pr.z0) * k;
+      m.position.set(x, 0.6 + Math.sin(k * Math.PI) * 0.8, z);
+      // The icon points up-right (45°); turn it along the screen direction of flight.
+      const ang = Math.atan2(-(pr.z1 - pr.z0) * Math.sin(PITCH), pr.x1 - pr.x0);
+      m.rotation.set(-PITCH, 0, ang - Math.PI / 4);
+    });
 
     // Entities. Far ones are hidden and skipped.
     for (const v of this.views.values()) {

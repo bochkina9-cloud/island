@@ -125,3 +125,9 @@ button, input { font-family: inherit; font-size: inherit; color: inherit; }
 fieldset { border: 2px solid rgba(61, 43, 31, 0.4); border-radius: 10px; margin: 10px 0; }
 .radio { display: block; margin: 3px 0; cursor: pointer; }
 .help ul, .help ol { padding-left: 22px; line-height: 1.45; }
+
+.minimap { position: absolute; top: 112px; right: 12px; width: 170px; height: 170px; padding: 0; cursor: pointer; }
+.hotbar.pack { padding: 4px 6px; }
+.slot.picked { outline: 3px solid #f2c66a; }
+.pot-result { margin: 4px 0; min-height: 28px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.pot-result img { width: 28px; height: 28px; }

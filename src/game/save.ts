@@ -71,6 +71,10 @@ export function migrate(state: GameState): GameState {
     // 0.3 adds seasons and food freshness; missing values mean "fresh" and "no rain yet".
     state.version = 3;
   }
+  if (state.version === 3) {
+    // 0.4 adds the backpack, bow, pot, cellar and hut; nothing to convert.
+    state.version = 4;
+  }
   return state;
 }
 
