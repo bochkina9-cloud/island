@@ -3,7 +3,7 @@ import type { Recipe } from './game/data';
 import { deleteSave, exportSave, writeSave } from './game/save';
 import { Game } from './game/sim';
 import { createWorld } from './game/world';
-import { type LoadedSprite, loadArt } from './render/art';
+import { type Art, loadArt } from './render/art';
 import { WorldView } from './render/scene';
 import { Hud } from './ui/hud';
 import { Controls } from './ui/input';
@@ -45,7 +45,7 @@ const HELP = `
     <li><b>Лук:</b> возьмите в руку и кликните по кабану издалека; стрелы иногда можно подобрать.</li>
   </ul>`;
 
-let art: Record<string, LoadedSprite>;
+let art: Art;
 
 async function boot() {
   const loading = document.getElementById('loading')!;
@@ -216,7 +216,7 @@ function play(choice: MenuResult): Promise<void> {
         }
       });
       canvas.addEventListener('wheel', (ev) => {
-        view.zoom = Math.max(14, Math.min(42, view.zoom + Math.sign(ev.deltaY) * 2));
+        view.zoom = Math.max(9, Math.min(40, view.zoom * (ev.deltaY > 0 ? 1.12 : 1 / 1.12)));
       }, { passive: true });
 
       // Leaving the tab pauses and saves.

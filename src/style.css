@@ -19,6 +19,7 @@ button, input { font-family: inherit; font-size: inherit; color: inherit; }
 .loading-card { position: static; inset: auto; color: var(--ink); padding: 24px 40px; }
 
 .game canvas { display: block; }
+.vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 48%, rgba(0, 0, 0, 0) 58%, rgba(52, 34, 14, 0.28) 88%, rgba(40, 24, 8, 0.45) 100%); }
 
 /* Hand-drawn panels: paper colour, ink border, slightly uneven corners. */
 .panel {

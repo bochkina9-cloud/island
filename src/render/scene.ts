@@ -3,11 +3,28 @@ import { DUSK_START, NIGHT_START } from '../game/data';
 import type { Game } from '../game/sim';
 import type { Entity } from '../game/state';
 import { MAP_SIZE, SHORE, type Terrain } from '../game/world';
-import type { LoadedSprite } from './art';
+import type { Art, LoadedSprite } from './art';
 import { paintGround } from './ground';
 
-const PITCH = (52 * Math.PI) / 180;
+const PITCH = (46 * Math.PI) / 180;
 const MAX_LIGHTS = 8;
+/** Sun from the right and a little behind the camera: shadows fall to the left and slightly down. */
+const SUN_ANGLE = Math.PI - 1.22;
+const POSES = ['pose_swing_up', 'pose_swing_down', 'pose_thrust', 'pose_hold_forward', 'pose_pickup', 'pose_paddle'];
+/** Where the tool hand is on the walking frames (fraction of the sprite, y from the feet). */
+const WALK_HAND: Record<'front' | 'side' | 'back', [number, number]> = { front: [0.12, 0.46], side: [0.6, 0.45], back: [0.9, 0.47] };
+/** How the tool turns in each pose (radians, counter-clockwise, hero facing right). */
+const TOOL_ANGLE: Record<string, number> = {
+  walk: -1.8,
+  pose_swing_up: 1.0,
+  pose_swing_down: -1.45,
+  pose_thrust: -0.8,
+  pose_hold_forward: -0.55,
+  pose_pickup: -1.2,
+  pose_paddle: -2.2,
+};
+/** Things that bend in the wind, and how much. */
+const SWAY: Partial<Record<string, number>> = { palm: 0.6, tree: 0.5, sapling: 1, grass_tuft: 1.4, berry_bush: 0.7, vines: 0.8 };
 
 /** Uniforms shared by every material: one place to set daylight and fire light. */
 const shared = {
@@ -48,11 +65,15 @@ const LIGHT_GLSL = /* glsl */ `
 `;
 
 const SPRITE_VERT = /* glsl */ `
+  uniform float uSway;
   varying vec2 vUv;
   varying vec3 vWorld;
   void main() {
     vUv = uv;
-    vec4 w = modelMatrix * vec4(position, 1.0);
+    // Wind: the top leans, the base stays put.
+    vec3 p = position;
+    p.x += uSway * p.y;
+    vec4 w = modelMatrix * vec4(p, 1.0);
     vWorld = w.xyz;
     gl_Position = projectionMatrix * viewMatrix * w;
   }
@@ -77,6 +98,34 @@ const SPRITE_FRAG = /* glsl */ `
   }
 `;
 
+/**
+ * The hero: legs are bent in the texture lookup, so one painted frame walks smoothly.
+ * uStride spreads the legs (side view), uLift raises one foot (front and back views).
+ */
+const HERO_FRAG = /* glsl */ `
+  ${LIGHT_GLSL}
+  uniform sampler2D map;
+  uniform float uFlash;
+  uniform float uFootX;
+  uniform float uStride;
+  uniform vec2 uLift;
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  void main() {
+    vec2 uv = vUv;
+    float leg = clamp(1.0 - uv.y / 0.42, 0.0, 1.0);
+    float side = uv.x < uFootX ? -1.0 : 1.0;
+    uv.x -= side * uStride * leg;
+    uv.y -= (side < 0.0 ? uLift.x : uLift.y) * leg;
+    vec4 c = texture2D(map, uv);
+    if (uv.y < 0.0 || c.a < 0.45) discard;
+    vec3 col = applyLight(c.rgb, vWorld);
+    col = mix(col, vec3(1.0, 0.35, 0.3), uFlash);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+/** Contact shadow right under an object. */
 const SHADOW_FRAG = /* glsl */ `
   ${LIGHT_GLSL}
   uniform sampler2D map;
@@ -85,7 +134,28 @@ const SHADOW_FRAG = /* glsl */ `
   void main() {
     vec4 c = texture2D(map, vUv);
     float day = clamp(uAmbient.r, 0.0, 1.0);
-    gl_FragColor = vec4(0.0, 0.0, 0.0, c.a * 0.45 * day);
+    gl_FragColor = vec4(0.08, 0.06, 0.02, c.a * 0.3 * day);
+  }
+`;
+
+/**
+ * Silhouette shadow: the sprite itself laid on the ground away from the sun.
+ * Softer and lighter the further it is from the object's foot.
+ */
+const SILHOUETTE_FRAG = /* glsl */ `
+  ${LIGHT_GLSL}
+  uniform sampler2D map;
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  void main() {
+    float r = 0.004 + 0.025 * vUv.y;
+    float a = texture2D(map, vUv).a * 0.36
+      + texture2D(map, vUv + vec2(r, 0.0)).a * 0.16 + texture2D(map, vUv - vec2(r, 0.0)).a * 0.16
+      + texture2D(map, vUv + vec2(0.0, r)).a * 0.16 + texture2D(map, vUv - vec2(0.0, r)).a * 0.16;
+    float day = smoothstep(0.35, 0.85, uAmbient.r);
+    a *= 0.42 * day * (1.0 - 0.45 * vUv.y) * (1.0 - uStorm * 0.7);
+    if (a < 0.004) discard;
+    gl_FragColor = vec4(0.10, 0.08, 0.03, a);
   }
 `;
 
@@ -93,6 +163,9 @@ const GROUND_FRAG = /* glsl */ `
   ${LIGHT_GLSL}
   uniform sampler2D map;
   uniform sampler2D uHeight;
+  uniform sampler2D uGrass;
+  uniform vec3 uGrassMean;
+  uniform float uHasGrass;
   varying vec2 vUv;
   varying vec3 vWorld;
   void main() {
@@ -101,6 +174,10 @@ const GROUND_FRAG = /* glsl */ `
     float a = smoothstep(-0.012, 0.022, h);
     if (a < 0.01) discard;
     vec4 c = texture2D(map, vUv);
+    // Painted grass detail where the ground is green; the base colour still comes from the map.
+    float green = smoothstep(0.3, 0.42, (c.g - c.b) / max(c.g, 0.01)) * uHasGrass;
+    vec3 detail = 1.0 + (texture2D(uGrass, vWorld.xz / 3.0).rgb / uGrassMean - 1.0) * 2.2;
+    c.rgb *= mix(vec3(1.0), detail, green);
     gl_FragColor = vec4(applyLight(applySeason(c.rgb), vWorld), a);
   }
 `;
@@ -115,18 +192,19 @@ const WATER_FRAG = /* glsl */ `
     float h = -1.0;
     if (m.x > 0.0 && m.y > 0.0 && m.x < 1.0 && m.y < 1.0) h = texture2D(uHeight, m).r * 2.0 - 1.0;
     float depth = clamp(-h, 0.0, 1.0);
-    vec3 shallow = vec3(0.50, 0.88, 0.83);
-    vec3 mid = vec3(0.22, 0.71, 0.77);
-    vec3 deep = vec3(0.12, 0.47, 0.66);
-    vec3 col = mix(shallow, mid, smoothstep(0.0, 0.12, depth));
-    col = mix(col, deep, smoothstep(0.12, 0.6, depth));
+    vec3 shallow = vec3(0.36, 0.68, 0.64);
+    vec3 mid = vec3(0.20, 0.47, 0.50);
+    vec3 deep = vec3(0.15, 0.29, 0.37);
+    vec3 col = mix(shallow, mid, smoothstep(0.0, 0.1, depth));
+    col = mix(col, deep, smoothstep(0.1, 0.45, depth));
     float w = sin(vWorld.x * 0.9 + uTime * 0.8) + sin(vWorld.z * 0.7 - uTime * 1.1) + sin((vWorld.x + vWorld.z) * 0.35 + uTime * 0.5);
     col = mix(col, vec3(0.16, 0.30, 0.38), uStorm * 0.55);
     col += vec3(0.03 + uStorm * 0.05) * w;
     // Surf: animated foam lines running towards the shore.
-    float band = 1.0 - smoothstep(0.0, 0.07, depth);
-    float lines = smoothstep(0.55, 0.9, sin(depth * 140.0 - uTime * (2.2 + uStorm * 3.0)));
-    float foam = band * (0.35 + 0.65 * lines);
+    float band = 1.0 - smoothstep(0.0, 0.045, depth);
+    float lines = smoothstep(0.6, 0.92, sin(depth * 200.0 - uTime * (2.2 + uStorm * 3.0) + sin(vWorld.x * 0.8 + vWorld.z * 0.5) * 1.5));
+    float edge = 1.0 - smoothstep(0.0, 0.008, depth);
+    float foam = band * (0.12 + 0.8 * lines) + edge * 0.6;
     col = mix(col, vec3(0.97, 0.98, 0.95), foam * 0.85);
     // Small sparkles in deeper water.
     float sp = sin(vWorld.x * 3.1 + uTime * 1.7) * sin(vWorld.z * 2.7 - uTime * 1.3);
@@ -140,6 +218,9 @@ interface SpriteView {
   mesh: THREE.Mesh;
   mat: THREE.ShaderMaterial;
   shadow: THREE.Mesh;
+  /** Silhouette cast on the ground. */
+  cast: THREE.Mesh;
+  castMat: THREE.ShaderMaterial;
   key: string;
   flame?: THREE.Mesh;
   /** Wildfire flames on a burning object. */
@@ -153,7 +234,20 @@ export class WorldView {
   private textures = new Map<string, THREE.Texture>();
   private geometries = new Map<string, THREE.PlaneGeometry>();
   private views = new Map<number, SpriteView>();
-  private player: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; shadow: THREE.Mesh; tool: THREE.Mesh; toolMat: THREE.ShaderMaterial };
+  private hero!: {
+    group: THREE.Group;
+    mesh: THREE.Mesh;
+    mat: THREE.ShaderMaterial;
+    shadow: THREE.Mesh;
+    cast: THREE.Mesh;
+    castMat: THREE.ShaderMaterial;
+    tool: THREE.Mesh;
+    toolMat: THREE.ShaderMaterial;
+    view: 'front' | 'side' | 'back';
+    phase: number;
+    lastX: number;
+    lastZ: number;
+  };
   private ghost: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; key: string } | null = null;
   private shadowMat: THREE.ShaderMaterial;
   private bobber!: THREE.Mesh;
@@ -161,18 +255,35 @@ export class WorldView {
   private arrows: THREE.Mesh[] = [];
   private heightTex!: THREE.DataTexture;
   private clock = 0;
-  zoom = 26;
+  private sprites: Record<string, LoadedSprite>;
+  zoom = 13;
   readonly groundCanvas: HTMLCanvasElement;
 
   constructor(
     container: HTMLElement,
     private game: Game,
-    private art: Record<string, LoadedSprite>,
+    private art: Art,
   ) {
+    this.sprites = art.sprites;
+    // Painted sprites fall back to the vector placeholders when missing.
+    const alias = (key: string, fallback: string) => {
+      if (!this.sprites[key]) this.sprites[key] = this.sprites[fallback];
+    };
+    for (const k of ['hero_front', 'hero_side', 'hero_back', ...POSES]) alias(k, 'player_0');
+    alias('tent', 'shelter');
+    alias('boulder_2', 'boulder_0');
+    alias('boulder_3', 'boulder_1');
+    alias('cliff_1', 'boulder_0');
+    alias('stones_1', 'item_stone');
+
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setClearColor(0x1e78a8);
+    this.renderer.setClearColor(0x2b525f);
     container.appendChild(this.renderer.domElement);
+    // Soft warm darkening at the edges, like the reference painting.
+    const vignette = document.createElement('div');
+    vignette.className = 'vignette';
+    container.appendChild(vignette);
     this.camera = new THREE.PerspectiveCamera(32, 1, 0.5, 400);
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -189,15 +300,7 @@ export class WorldView {
       depthWrite: false,
     });
 
-    const pm = this.spriteMaterial('player_0');
-    const pmesh = new THREE.Mesh(this.geometry('player_0'), pm);
-    pmesh.rotation.x = -PITCH;
-    const toolMat = this.spriteMaterial('item_axe');
-    const tool = new THREE.Mesh(this.geometry('item_axe', 0.9), toolMat);
-    tool.rotation.x = -PITCH;
-    tool.visible = false;
-    this.player = { mesh: pmesh, mat: pm, shadow: this.makeShadow(0.9), tool, toolMat };
-    this.scene.add(pmesh, tool, this.player.shadow);
+    this.buildHero();
 
     // Fishing float and line.
     const bm = this.spriteMaterial('bobber');
@@ -213,6 +316,37 @@ export class WorldView {
     this.syncEntities();
   }
 
+  private buildHero() {
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        ...shared,
+        map: { value: this.texture('hero_front') },
+        uFlash: { value: 0 },
+        uFootX: { value: 0.5 },
+        uStride: { value: 0 },
+        uLift: { value: new THREE.Vector2() },
+      },
+      vertexShader: SPRITE_VERT,
+      fragmentShader: HERO_FRAG,
+    });
+    const mesh = new THREE.Mesh(this.geometry('hero_front'), mat);
+    const toolMat = this.spriteMaterial('item_axe');
+    // The handle end of an item icon (lower left) is the pivot, so the tool turns in the fist.
+    const tg = new THREE.PlaneGeometry(0.8, 0.8);
+    tg.translate(0.8 * 0.22, 0.8 * 0.3, 0);
+    const tool = new THREE.Mesh(tg, toolMat);
+    tool.visible = false;
+    const group = new THREE.Group();
+    group.rotation.x = -PITCH;
+    group.add(mesh, tool);
+    const castMat = this.castMaterial('hero_front');
+    const cast = new THREE.Mesh(this.geometry('hero_front'), castMat);
+    cast.renderOrder = 1;
+    const shadow = this.makeShadow(0.7);
+    this.scene.add(group, shadow, cast);
+    this.hero = { group, mesh, mat, shadow, cast, castMat, tool, toolMat, view: 'front', phase: 0, lastX: this.game.player.x, lastZ: this.game.player.z };
+  }
+
   resize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -224,7 +358,7 @@ export class WorldView {
   private texture(key: string): THREE.Texture {
     let t = this.textures.get(key);
     if (!t) {
-      const s = this.art[key];
+      const s = this.sprites[key];
       t = new THREE.CanvasTexture(s.canvas);
       t.colorSpace = THREE.NoColorSpace;
       t.anisotropy = 4;
@@ -233,16 +367,21 @@ export class WorldView {
     return t;
   }
 
-  /** Plane sized from the sprite, anchored at its bottom centre. */
+  /** World size of a sprite. */
+  private size(key: string, scale = 1): { w: number; h: number } {
+    const d = this.sprites[key].def;
+    const h = d.size * scale;
+    return { w: (h * d.w) / d.h, h };
+  }
+
+  /** Plane sized from the sprite, anchored where its feet are (bottom centre for placeholders). */
   private geometry(key: string, scale = 1): THREE.PlaneGeometry {
     const id = `${key}@${scale}`;
     let g = this.geometries.get(id);
     if (!g) {
-      const d = this.art[key].def;
-      const h = d.size * scale;
-      const w = (h * d.w) / d.h;
+      const { w, h } = this.size(key, scale);
       g = new THREE.PlaneGeometry(w, h);
-      g.translate(0, h / 2, 0);
+      g.translate((0.5 - (this.sprites[key].footX ?? 0.5)) * w, h / 2, 0);
       this.geometries.set(id, g);
     }
     return g;
@@ -257,10 +396,28 @@ export class WorldView {
         uOpacity: { value: 1 },
         uTint: { value: new THREE.Color(1, 1, 1) },
         uUnlit: { value: 0 },
+        uSway: { value: 0 },
       },
       vertexShader: SPRITE_VERT,
       fragmentShader: SPRITE_FRAG,
     });
+  }
+
+  private castMaterial(key: string): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
+      uniforms: { ...shared, map: { value: this.texture(key) }, uSway: { value: 0 } },
+      vertexShader: SPRITE_VERT,
+      fragmentShader: SILHOUETTE_FRAG,
+      transparent: true,
+      depthWrite: false,
+    });
+  }
+
+  /** Lays a silhouette on the ground, pointing away from the sun. */
+  private placeCast(m: THREE.Mesh, x: number, z: number, mirror: number) {
+    m.position.set(x, 0.012, z);
+    m.rotation.set(-Math.PI / 2, SUN_ANGLE, 0, 'YXZ');
+    m.scale.set(mirror, this.castLength, 1);
   }
 
   private makeShadow(width: number): THREE.Mesh {
@@ -276,8 +433,25 @@ export class WorldView {
     const tex = new THREE.CanvasTexture(this.groundCanvas);
     tex.colorSpace = THREE.NoColorSpace;
     tex.anisotropy = 8;
+    const grassImg = this.art.textures.ground_grass;
+    let grass: THREE.Texture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    grass.needsUpdate = true;
+    if (grassImg) {
+      grass = new THREE.Texture(grassImg);
+      grass.wrapS = grass.wrapT = THREE.RepeatWrapping;
+      grass.colorSpace = THREE.NoColorSpace;
+      grass.anisotropy = 8;
+      grass.needsUpdate = true;
+    }
     const mat = new THREE.ShaderMaterial({
-      uniforms: { ...shared, map: { value: tex }, uHeight: { value: this.heightTex } },
+      uniforms: {
+        ...shared,
+        map: { value: tex },
+        uHeight: { value: this.heightTex },
+        uGrass: { value: grass },
+        uGrassMean: { value: new THREE.Vector3(...meanColor(grassImg)) },
+        uHasGrass: { value: grassImg ? 1 : 0 },
+      },
       vertexShader: SPRITE_VERT,
       fragmentShader: GROUND_FRAG,
       transparent: true,
@@ -327,7 +501,10 @@ export class WorldView {
     switch (e.kind) {
       case 'palm': return `palm_${v % 3}`;
       case 'tree': return `tree_${v % 3}`;
-      case 'boulder': return `boulder_${v % 2}`;
+      case 'boulder': return `boulder_${(v % 3) + 1}`;
+      case 'cliff': return 'cliff_1';
+      case 'stones': return 'stones_1';
+      case 'shelter': return 'tent';
       case 'sapling': return e.regrowOn !== undefined ? 'sapling_bare' : 'sapling';
       case 'grass_tuft': return e.regrowOn !== undefined ? 'grass_cut' : 'grass_tuft';
       case 'berry_bush': return e.regrowOn !== undefined ? 'berry_bush_empty' : 'berry_bush';
@@ -357,10 +534,13 @@ export class WorldView {
         const mat = this.spriteMaterial(key);
         const mesh = new THREE.Mesh(this.geometry(key, e.kind === 'drop' ? 0.7 : 1), mat);
         mesh.rotation.x = -PITCH;
-        const d = this.art[key].def;
-        const shadowW = Math.min(3.2, ((d.size * d.w) / d.h) * (e.kind === 'palm' ? 0.35 : 0.8));
-        const shadow = this.makeShadow(shadowW);
-        v = { entity: e, mesh, mat, shadow, key };
+        const { w } = this.size(key);
+        const shadow = this.makeShadow(Math.min(3.2, w * (e.kind === 'palm' ? 0.35 : 0.7)));
+        const castMat = this.castMaterial(key);
+        const cast = new THREE.Mesh(this.geometry(key, e.kind === 'drop' ? 0.7 : 1), castMat);
+        cast.renderOrder = 1;
+        cast.visible = e.kind !== 'drop' && e.kind !== 'raft';
+        v = { entity: e, mesh, mat, shadow, cast, castMat, key };
         if (e.kind === 'campfire') {
           const fm = this.spriteMaterial('flame');
           fm.uniforms.uUnlit.value = 1;
@@ -368,7 +548,7 @@ export class WorldView {
           v.flame.rotation.x = -PITCH;
           this.scene.add(v.flame);
         }
-        this.scene.add(mesh, shadow);
+        this.scene.add(mesh, shadow, cast);
         this.views.set(e.id, v);
       }
       v.entity = e;
@@ -377,10 +557,11 @@ export class WorldView {
   }
 
   private removeView(v: SpriteView) {
-    this.scene.remove(v.mesh, v.shadow);
+    this.scene.remove(v.mesh, v.shadow, v.cast);
     if (v.flame) this.scene.remove(v.flame);
     if (v.fire) this.scene.remove(v.fire);
     v.mat.dispose();
+    v.castMat.dispose();
     this.views.delete(v.entity.id);
   }
 
@@ -427,26 +608,7 @@ export class WorldView {
     }
     shared.uLightCount.value = n;
 
-    // Player.
-    const sailing = p.onRaft !== undefined;
-    const bob = sailing ? 0.28 + Math.sin(this.clock * 2.2) * 0.05 : g.moving ? Math.abs(Math.sin(this.clock * 11)) * 0.12 : 0;
-    const frame = g.moving && !sailing && Math.sin(this.clock * 11) > 0 ? 'player_1' : 'player_0';
-    this.player.mat.uniforms.map.value = this.texture(frame);
-    this.player.mat.uniforms.uFlash.value = g.hurtPulse > 0 ? 0.5 : 0;
-    this.player.mesh.position.set(p.x, bob, p.z);
-    this.player.mesh.scale.set(g.facing * (1 + g.actionPulse * 0.15), 1 - g.actionPulse * 0.12, 1);
-    this.player.shadow.position.set(p.x, 0.02, p.z + 0.05);
-    this.player.shadow.visible = !sailing;
-    const hand = p.hand;
-    this.player.tool.visible = !!hand;
-    if (hand) {
-      this.player.toolMat.uniforms.map.value = this.texture(`item_${hand.item}`);
-      this.player.toolMat.uniforms.uUnlit.value = hand.item === 'torch' ? 1 : 0;
-      const swing = g.actionPulse > 0 ? Math.sin((g.actionPulse / 0.3) * Math.PI) * 0.9 : 0;
-      this.player.tool.position.set(p.x + g.facing * 0.45, 0.45 + bob, p.z + 0.08);
-      this.player.tool.scale.set(g.facing, 1, 1);
-      this.player.tool.rotation.set(-PITCH, 0, -g.facing * swing);
-    }
+    this.updateHero(dt);
 
     // Fishing: the float bobs, and dips when a fish bites.
     const float = g.bobber;
@@ -454,7 +616,7 @@ export class WorldView {
     if (float) {
       const dip = g.biting ? -0.12 + Math.sin(this.clock * 30) * 0.06 : Math.sin(this.clock * 3) * 0.03;
       this.bobber.position.set(float.x, dip, float.z);
-      const tip = new THREE.Vector3(p.x + g.facing * 0.9, 1.6 + (sailing ? 0.28 : 0), p.z + 0.1);
+      const tip = new THREE.Vector3(p.x + g.facing * 0.9, 1.6 + (p.onRaft !== undefined ? 0.28 : 0), p.z + 0.1);
       const pos = this.fishLine.geometry.attributes.position as THREE.BufferAttribute;
       pos.setXYZ(0, tip.x, tip.y, tip.z);
       pos.setXYZ(1, float.x, 0.25 + dip, float.z);
@@ -487,6 +649,7 @@ export class WorldView {
       const far = Math.abs(e.x - p.x) > 40 || Math.abs(e.z - p.z) > 34;
       v.mesh.visible = !far;
       v.shadow.visible = !far;
+      v.cast.visible = !far && e.kind !== 'drop' && e.kind !== 'raft';
       if (v.flame) v.flame.visible = !far;
       if (far && e.kind !== 'boar') continue;
       let sx = 1;
@@ -495,13 +658,16 @@ export class WorldView {
       if (e.kind === 'boar') {
         const b = g.brain(e);
         const walking = b.moving && Math.sin(this.clock * (b.mode === 'wander' ? 8 : 16) + e.id) > 0;
-        v.mat.uniforms.map.value = this.texture(walking ? 'boar_1' : 'boar_0');
+        v.mat.uniforms.map.value = v.castMat.uniforms.map.value = this.texture(walking ? 'boar_1' : 'boar_0');
         v.mat.uniforms.uFlash.value = b.hurt > 0 ? 0.6 : 0;
         sx = b.facing;
         y = b.moving ? Math.abs(Math.sin(this.clock * 12 + e.id)) * 0.06 : 0;
-      } else if (e.kind === 'palm' || e.kind === 'tree') {
-        // Sway in the wind; much stronger in a storm.
-        v.mesh.rotation.z = Math.sin(this.clock * (0.9 + g.storm * 2) + e.id) * (0.015 + g.storm * 0.06);
+      } else if (SWAY[e.kind]) {
+        // Sway in the wind: gentle gusts on a calm day, hard bending in a storm.
+        const gust = 0.6 + 0.4 * Math.sin(this.clock * 0.37 + e.x * 0.05);
+        const swing = Math.sin(this.clock * (1.1 + g.storm * 2.2) + e.id * 1.7) + 0.35 * Math.sin(this.clock * 2.9 + e.id);
+        const lean = g.storm * 0.12 * Math.sign(g.wind.x || 1);
+        v.mat.uniforms.uSway.value = v.castMat.uniforms.uSway.value = SWAY[e.kind]! * ((0.018 + g.storm * 0.07) * gust * swing + lean) * (1 + g.rain * 0.3);
       } else if (e.kind === 'raft') {
         y = Math.sin(this.clock * 2.2 + e.id) * 0.05 + 0.02;
         v.mesh.rotation.z = Math.sin(this.clock * 1.7 + e.id) * (0.02 + g.storm * 0.05);
@@ -513,6 +679,7 @@ export class WorldView {
       v.mesh.position.set(e.x + wobble, y, e.z);
       v.mesh.scale.set(sx, sy, 1);
       v.shadow.position.set(e.x, 0.02, e.z + 0.05);
+      if (v.cast.visible) this.placeCast(v.cast, e.x, e.z, sx);
       const onFire = (e.burn ?? 0) > 0;
       if (onFire && !v.fire) {
         const fm = this.spriteMaterial('flame');
@@ -551,6 +718,99 @@ export class WorldView {
     this.renderer.render(this.scene, this.camera);
   }
 
+  /** Shadow length over the day: short around noon, long towards evening. */
+  private get castLength(): number {
+    const t = this.game.state.time;
+    return 0.55 + 0.9 * smooth(t / NIGHT_START) ** 2;
+  }
+
+  /** The hero: view by direction, walking legs, action poses and the tool in hand. */
+  private updateHero(dt: number) {
+    const g = this.game;
+    const p = g.player;
+    const h = this.hero;
+    const sailing = p.onRaft !== undefined;
+    const dx = p.x - h.lastX;
+    const dz = p.z - h.lastZ;
+    h.lastX = p.x;
+    h.lastZ = p.z;
+    if (g.moving && Math.hypot(dx, dz) > 1e-4) {
+      h.view = Math.abs(dz) > Math.abs(dx) * 1.2 ? (dz < 0 ? 'back' : 'front') : 'side';
+      h.phase += dt * 9;
+    } else {
+      // Settle into a standing pose.
+      const k = h.phase % Math.PI;
+      if (k > 0.05) h.phase += Math.min(dt * 9, Math.PI - k);
+    }
+
+    // Which painted frame shows right now.
+    let key = `hero_${h.view}`;
+    const act = g.actionPulse > 0 ? 1 - g.actionPulse / 0.3 : -1;
+    if (sailing) key = 'pose_paddle';
+    else if (act >= 0) {
+      switch (g.action) {
+        case 'chop':
+        case 'mine':
+        case 'strike':
+          key = act < 0.45 ? 'pose_swing_up' : 'pose_swing_down';
+          break;
+        case 'thrust': key = 'pose_thrust'; break;
+        case 'shoot': key = 'pose_hold_forward'; break;
+        case 'pick': key = 'pose_pickup'; break;
+        case 'eat': key = 'hero_front'; break;
+      }
+    } else if (g.bobber) key = 'pose_hold_forward';
+    const posed = key.startsWith('pose_') || act >= 0;
+    if (posed && key !== 'hero_front') h.view = 'side';
+    const sprite = this.sprites[key];
+    const mirror = h.view === 'side' || key.startsWith('pose_') ? g.facing : 1;
+
+    h.mat.uniforms.map.value = h.castMat.uniforms.map.value = this.texture(key);
+    h.mesh.geometry = h.cast.geometry = this.geometry(key);
+    h.mat.uniforms.uFootX.value = sprite.footX ?? 0.5;
+    h.mat.uniforms.uFlash.value = g.hurtPulse > 0 ? 0.5 : 0;
+    const walking = g.moving && !sailing && !posed;
+    const s = Math.sin(h.phase);
+    const stride = walking || h.phase % Math.PI > 0.05 ? s : 0;
+    if (h.view === 'side' && !posed) {
+      h.mat.uniforms.uStride.value = Math.abs(stride) * 0.06;
+      h.mat.uniforms.uLift.value.set(0, 0);
+    } else if (!posed) {
+      h.mat.uniforms.uStride.value = 0;
+      h.mat.uniforms.uLift.value.set(Math.max(0, stride) * 0.06, Math.max(0, -stride) * 0.06);
+    } else {
+      h.mat.uniforms.uStride.value = 0;
+      h.mat.uniforms.uLift.value.set(0, 0);
+    }
+    // The body is highest when the legs pass each other.
+    const bob = sailing ? 0.28 + Math.sin(this.clock * 2.2) * 0.05 : walking ? (1 - Math.abs(stride)) * 0.04 : 0;
+    h.group.position.set(p.x, bob, p.z);
+    h.mesh.scale.set(mirror, 1, 1);
+    // A slight sway of the shoulders while walking towards or away from the camera.
+    h.mesh.rotation.z = walking && h.view !== 'side' ? stride * 0.025 : 0;
+    h.shadow.position.set(p.x, 0.02, p.z + 0.05);
+    h.shadow.visible = !sailing;
+    h.cast.visible = !sailing;
+    this.placeCast(h.cast, p.x, p.z, mirror);
+
+    // Tool in the fist.
+    const hand = p.hand;
+    h.tool.visible = !!hand && key !== 'pose_paddle';
+    if (hand) {
+      h.toolMat.uniforms.map.value = this.texture(`item_${hand.item}`);
+      h.toolMat.uniforms.uUnlit.value = hand.item === 'torch' ? 1 : 0;
+      const { w, h: ht } = this.size(key);
+      const foot = sprite.footX ?? 0.5;
+      const [hx, hy] = sprite.handX !== undefined ? [sprite.handX, sprite.handY ?? 0.5] : WALK_HAND[h.view];
+      h.tool.position.set((hx - foot) * w * mirror, hy * ht + (key.startsWith('hero_') ? Math.abs(stride) * 0.02 : 0), h.view === 'back' ? -0.02 : 0.02);
+      let ang = TOOL_ANGLE[key] ?? TOOL_ANGLE.walk;
+      if (hand.item === 'torch' && !key.startsWith('pose_')) ang = -0.5;
+      if (key.startsWith('hero_') && walking) ang += stride * 0.12;
+      h.tool.scale.set(mirror, 1, 1);
+      h.tool.rotation.set(0, 0, ang * mirror);
+    }
+  }
+
   // ---------------- Picking ----------------
 
   /** Ground point under the cursor. */
@@ -570,9 +830,7 @@ export class WorldView {
     for (const v of this.views.values()) {
       const e = v.entity;
       if (!v.mesh.visible) continue;
-      const d = this.art[v.key].def;
-      const h = d.size * (e.kind === 'drop' ? 0.7 : 1);
-      const w = (h * d.w) / d.h;
+      const { w, h } = this.size(v.key, e.kind === 'drop' ? 0.7 : 1);
       const base = this.project(v3.set(e.x, 0, e.z));
       const top = this.project(v3.set(e.x, h * Math.cos(PITCH), e.z - h * Math.sin(PITCH)));
       const pxPerUnit = Math.abs(base.y - top.y) / Math.max(0.01, h);
@@ -596,8 +854,11 @@ export class WorldView {
 
 /** Light colour over the day: bright day, warm dusk, dark blue night, gradual dawn. */
 export function ambientFor(t: number): THREE.Color {
-  const day = new THREE.Color(1, 1, 1);
-  const dusk = new THREE.Color(0.95, 0.72, 0.58);
+  // Warm all day, turning golden through the afternoon.
+  const morning = new THREE.Color(1.0, 0.97, 0.9);
+  const golden = new THREE.Color(1.05, 0.9, 0.7);
+  const day = morning.clone().lerp(golden, smooth((Math.min(t, DUSK_START) - 0.1) / (DUSK_START - 0.1)) ** 1.5);
+  const dusk = new THREE.Color(0.95, 0.66, 0.5);
   const night = new THREE.Color(0.13, 0.15, 0.27);
   const c = new THREE.Color();
   if (t < 0.06) return c.copy(night).lerp(day, smooth(t / 0.06));
@@ -612,4 +873,17 @@ export function ambientFor(t: number): THREE.Color {
 function smooth(x: number) {
   const k = Math.max(0, Math.min(1, x));
   return k * k * (3 - 2 * k);
+}
+
+/** Average colour of an image, 0..1: the painted grass is applied relative to it. */
+function meanColor(img: HTMLImageElement | undefined): [number, number, number] {
+  if (!img) return [1, 1, 1];
+  const c = document.createElement('canvas');
+  c.width = c.height = 16;
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(img, 0, 0, 16, 16);
+  const d = ctx.getImageData(0, 0, 16, 16).data;
+  const sum = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) sum[k] += d[i + k];
+  return sum.map((v) => v / 256 / 255) as [number, number, number];
 }

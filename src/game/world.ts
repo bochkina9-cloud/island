@@ -1,7 +1,7 @@
 import { Noise2D } from '../core/noise';
 import { hashString, makeRng } from '../core/rng';
-import type { ResourceKind } from './data';
-import { type Entity, type GameState, INVENTORY_SIZE, SAVE_VERSION, type WorldSettings, encodeBytes } from './state';
+import { RAFT_CARGO, type ResourceKind } from './data';
+import { CHEST_SIZE, type Entity, type GameState, INVENTORY_SIZE, SAVE_VERSION, type WorldSettings, encodeBytes } from './state';
 
 /** Size of the archipelago map in world units (1 unit ≈ 1 metre). */
 export const MAP_SIZE = 256;
@@ -41,6 +41,8 @@ export class Terrain {
   readonly ponds: { x: number; z: number; r: number }[] = [];
   private heightCache: Float32Array;
   readonly res = 4; // samples per unit in the cache
+  /** The hand-laid starting bay: where the hero stands, with the beach to the west. */
+  readonly bay: { x: number; z: number };
 
   constructor(seedText: string) {
     this.seed = hashString(seedText);
@@ -55,7 +57,59 @@ export class Terrain {
         this.heightCache[j * n + i] = this.rawHeight(i / this.res, j / this.res);
       }
     }
+    this.bay = this.sculptBay();
     this.placePonds();
+  }
+
+  /**
+   * Reshapes the west coast of the home island into the bay from the reference picture:
+   * sea along the left, a sandy beach, then a grass meadow rising gently to the right.
+   * The rest of the island stays as the seed made it; the bay blends into it.
+   */
+  private sculptBay(): { x: number; z: number } {
+    const home = this.home;
+    const rng = makeRng(this.seed ^ 0x6a09e667);
+    const bz = home.z + (rng() - 0.5) * home.r * 0.3;
+    // The natural waterline on that row, scanning from the centre westwards.
+    let coast = home.x - home.r;
+    for (let x = home.x; x > home.x - home.r * 1.6; x -= 0.5) {
+      if (this.rawHeight(x, bz) < SHORE) {
+        coast = x;
+        break;
+      }
+    }
+    const bx = Math.max(home.x - home.r * 0.9, coast) + 6;
+    const n = MAP_SIZE * this.res;
+    const phase = rng() * 6.28;
+    for (let j = Math.floor((bz - 24) * this.res); j <= Math.ceil((bz + 24) * this.res); j++) {
+      for (let i = Math.floor((bx - 26) * this.res); i <= Math.ceil((bx + 22) * this.res); i++) {
+        if (i < 0 || j < 0 || i >= n || j >= n) continue;
+        const u = i / this.res - bx;
+        const v = j / this.res - bz;
+        // How much of the designed shape applies: all of it in the middle, fading out at the edges.
+        const wv = 1 - smoothstep(12, 22, Math.abs(v));
+        const wu = 1 - smoothstep(10, 20, u);
+        const w = wv * wu;
+        if (w <= 0) continue;
+        // Waterline wanders a little; further out at the top where the shore rocks are.
+        // As in the picture: the water comes within ~3.5 m of the hero, the coast turns away
+        // to the upper left, and the beach widens towards the bottom of the screen.
+        const sx = -3.6 + Math.sin(v * 0.22 + phase) * 0.6 + Math.sin(v * 0.57 + phase * 2) * 0.3 - Math.max(0, -v - 4) * 0.35 - Math.max(0, v - 3) * 0.3;
+        const sand = 2.2 + Math.max(0, v - 2) * 0.22;
+        const d = u - sx; // metres inland from the waterline
+        let target: number;
+        if (d < 0) target = Math.max(-0.6, d * 0.05 - 0.01);
+        else if (d < sand) target = (d / sand) * 0.072;
+        else target = 0.075 + (d - sand) * 0.008;
+        target += this.elevation.noise(u * 0.3 + 40, v * 0.3) * 0.008;
+        const k = j * n + i;
+        // Out at sea the shape only ever deepens the water, so no land appears from nowhere.
+        const raw = this.heightCache[k];
+        const t = d < 0 && raw < target ? raw : target;
+        this.heightCache[k] = raw + (t - raw) * w;
+      }
+    }
+    return { x: bx, z: bz };
   }
 
   private rawHeight(x: number, z: number): number {
@@ -151,7 +205,8 @@ export class Terrain {
         const z = is.z + Math.sin(a) * r;
         const b = this.biome(x, z);
         if ((b === 'grass' || b === 'forest') && this.height(x, z) > 0.18 && this.islandAt(x, z) === is) {
-          if (this.ponds.every((p) => (p.x - x) ** 2 + (p.z - z) ** 2 > 22 * 22)) {
+          const nearBay = this.bay && Math.hypot(x - this.bay.x, z - this.bay.z) < 18;
+          if (!nearBay && this.ponds.every((p) => (p.x - x) ** 2 + (p.z - z) ** 2 > 22 * 22)) {
             this.ponds.push({ x, z, r: 1.6 + rng() * 1.2 });
             placed++;
           }
@@ -164,24 +219,20 @@ export class Terrain {
     return this.islands.find((i) => i.kind === 'home')!;
   }
 
-  /** A walkable grassy spot near the southern beach of the home island. */
+  /**
+   * A walkable grassy spot near the western beach of the home island, so the sea is on the
+   * left of the screen like in the reference picture.
+   */
   findSpawn(): { x: number; z: number } {
-    const home = this.home;
-    let best = { x: home.x, z: home.z };
-    let bestScore = -Infinity;
-    for (let z = home.z; z < home.z + home.r; z += 1) {
-      for (let x = home.x - home.r * 0.4; x < home.x + home.r * 0.4; x += 1) {
-        const h = this.height(x, z);
-        if (h > 0.09 && h < 0.16 && this.biome(x, z) === 'grass') {
-          const score = z - Math.abs(x - home.x) * 0.5;
-          if (score > bestScore) {
-            bestScore = score;
-            best = { x, z };
-          }
-        }
-      }
+    return { ...this.bay };
+  }
+
+  /** x of the waterline west of a point (within 14 m), or null if there is no sea there. */
+  shoreWest(x: number, z: number): number | null {
+    for (let d = 0; d < 14; d += 0.25) {
+      if (this.sailable(x - d, z)) return x - d + 0.25;
     }
-    return best;
+    return null;
   }
 }
 
@@ -224,7 +275,7 @@ const TABLES: Record<IslandKind, Table> = {
 export const BOARS: Record<IslandKind, number> = { home: 2, forest: 4, rocky: 0 };
 
 /** Builds a fresh world: terrain is implied by the seed, entities are generated here. */
-export function createWorld(settings: WorldSettings): { state: GameState; terrain: Terrain } {
+export function createWorld(settings: WorldSettings, opts: { camp?: boolean } = {}): { state: GameState; terrain: Terrain } {
   const terrain = new Terrain(settings.seedText);
   const rng = makeRng(terrain.seed ^ 0xabcdef);
   const entities: Entity[] = [];
@@ -255,6 +306,7 @@ export function createWorld(settings: WorldSettings): { state: GameState; terrai
       }
     }
   }
+  if (opts.camp !== false) buildCamp(terrain, spawn, entities, add);
   // Guarantee the first tools are reachable: flint and saplings near the start.
   for (const [kind, dx, dz] of [['flint_ground', 3, 1], ['flint_ground', -3.5, 2], ['sapling', 4, -3], ['grass_tuft', -4, -2], ['grass_tuft', 5, 3]] as const) {
     const p = { x: spawn.x + dx, z: spawn.z + dz };
@@ -287,6 +339,81 @@ export function createWorld(settings: WorldSettings): { state: GameState; terrai
   return { state, terrain };
 }
 
+/**
+ * The castaway's camp from the reference picture: sea and a moored raft on the left, rocks along
+ * the shore, a campfire, a canvas lean-to and a chest, cliffs behind. Positions are relative to the
+ * spawn point and checked against the terrain.
+ */
+function buildCamp(terrain: Terrain, spawn: { x: number; z: number }, entities: Entity[], add: (e: Omit<Entity, 'id'>) => void) {
+  // Clear generated clutter from the camp clearing.
+  for (let i = entities.length - 1; i >= 0; i--) {
+    const e = entities[i];
+    if (Math.hypot(e.x - spawn.x, e.z - spawn.z) < 9 && e.kind !== 'pond') entities.splice(i, 1);
+  }
+  const placed: { x: number; z: number }[] = [spawn];
+  const free = (x: number, z: number) => terrain.walkable(x, z) && terrain.height(x, z) > 0.03 && placed.every((q) => Math.hypot(q.x - x, q.z - z) > 1.6);
+  // Wanted spot, or the nearest free dry spot within 3 m of it.
+  const land = (dx: number, dz: number, e: Omit<Entity, 'id' | 'x' | 'z'>) => {
+    for (let r = 0; r <= 3; r += 0.5) {
+      for (let a = 0; a < Math.PI * 2; a += r ? Math.PI / 8 : 7) {
+        const x = spawn.x + dx + Math.cos(a) * r;
+        const z = spawn.z + dz + Math.sin(a) * r;
+        if (free(x, z)) {
+          placed.push({ x, z });
+          add({ ...e, x, z });
+          return;
+        }
+      }
+    }
+  };
+  const shore = (dz: number, inland: number, e: Omit<Entity, 'id' | 'x' | 'z'>) => {
+    const z = spawn.z + dz;
+    if (inland < 0) {
+      // Afloat, just off the beach: the nearest open water to the wanted spot.
+      for (let r = 0; r <= 4; r += 0.5) {
+        for (const k of [0, 1, -1]) {
+          const zz = z + k * r;
+          const s2 = terrain.shoreWest(spawn.x + 4, zz);
+          if (s2 === null) continue;
+          for (let d = inland; d >= inland - 2; d -= 0.4) {
+            if (terrain.sailable(s2 + d, zz) && terrain.sailable(s2 + d - 1.2, zz)) {
+              add({ ...e, x: s2 + d, z: zz });
+              return;
+            }
+          }
+        }
+      }
+      return;
+    }
+    // Rocks sit right at the waterline: search along the shore for a free spot.
+    for (let r = 0; r <= 3; r += 0.5) {
+      for (const k of [0, 1, -1]) {
+        const zz = z + k * r;
+        const s2 = terrain.shoreWest(spawn.x + 4, zz);
+        if (s2 === null) continue;
+        const x = s2 + inland + 0.3;
+        if (terrain.walkable(x, zz) && placed.every((q) => Math.hypot(q.x - x, q.z - zz) > 1.4)) {
+          placed.push({ x, z: zz });
+          add({ ...e, x, z: zz });
+          return;
+        }
+      }
+    }
+  };
+  land(2.6, -0.3, { kind: 'campfire', fuel: 150 });
+  land(4.2, -3.4, { kind: 'shelter' });
+  land(6.3, -2.2, { kind: 'chest', slots: new Array(CHEST_SIZE).fill(null) });
+  land(7.6, -6.6, { kind: 'cliff', v: 0 });
+  land(4.6, -7.6, { kind: 'cliff', v: 1 });
+  land(5.6, 2.6, { kind: 'stones', v: 0 });
+  land(1.4, 3.8, { kind: 'stones', v: 1 });
+  shore(-6.5, 0.6, { kind: 'boulder', v: 0 });
+  shore(-4.8, 1.6, { kind: 'boulder', v: 1 });
+  shore(-7.4, 2.4, { kind: 'boulder', v: 2 });
+  shore(-3.4, 0.4, { kind: 'stones', v: 2 });
+  shore(2.2, -1.4, { kind: 'raft', slots: new Array(RAFT_CARGO).fill(null), hp: 100 });
+}
+
 export function randomSpot(
   terrain: Terrain,
   rng: () => number,
@@ -304,4 +431,9 @@ export function randomSpot(
     return { x, z };
   }
   return null;
+}
+
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }

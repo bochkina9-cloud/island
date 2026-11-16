@@ -10,8 +10,8 @@ const still = { x: 0, z: 0 };
 
 describe('world generation', () => {
   it('is deterministic for a seed', () => {
-    const a = createWorld(settings).state;
-    const b = createWorld(settings).state;
+    const a = createWorld(settings, { camp: false }).state;
+    const b = createWorld(settings, { camp: false }).state;
     expect(a.entities).toEqual(b.entities);
     expect(a.player.x).toBe(b.player.x);
     const c = createWorld({ ...settings, seedText: 'другое' }).state;
@@ -60,7 +60,7 @@ describe('inventory', () => {
 
 describe('gameplay', () => {
   function newGame() {
-    const { state, terrain } = createWorld(settings);
+    const { state, terrain } = createWorld(settings, { camp: false });
     return new Game(state, terrain, 42);
   }
 
@@ -201,7 +201,7 @@ function seaRoute(game: Game, target: 'forest' | 'rocky'): { x: number; z: numbe
 
 describe('vertical slice', () => {
   function newGame() {
-    const { state, terrain } = createWorld(settings);
+    const { state, terrain } = createWorld(settings, { camp: false });
     return new Game(state, terrain, 42);
   }
   function run(game: Game, seconds: number, input = still) {
@@ -274,7 +274,7 @@ describe('vertical slice', () => {
 
   it('every seed lets you sail from home to both other islands', () => {
     for (const seedText of ['a', 'b', 'риф-5', 'лагуна-77', 'бухта-1234']) {
-      const { state, terrain } = createWorld({ ...settings, seedText });
+      const { state, terrain } = createWorld({ ...settings, seedText }, { camp: false });
       const game = new Game(state, terrain);
       waterNear(game);
       // Start the search from the water itself.
@@ -355,7 +355,7 @@ describe('vertical slice', () => {
   });
 
   it('migrates a 0.1 save into the archipelago keeping the inventory', () => {
-    const old = createWorld(settings).state as unknown as Record<string, unknown> & { player: { inv: unknown[] } };
+    const old = createWorld(settings, { camp: false }).state as unknown as Record<string, unknown> & { player: { inv: unknown[] } };
     old.version = 1;
     delete old.weather;
     old.player.inv[0] = { item: 'axe', count: 1, durability: 10 };
@@ -370,7 +370,7 @@ describe('vertical slice', () => {
 
 describe('seasons, spoilage, salt and fire', () => {
   function newGame() {
-    const { state, terrain } = createWorld(settings);
+    const { state, terrain } = createWorld(settings, { camp: false });
     state.entities = state.entities.filter((e) => e.kind !== 'boar');
     return new Game(state, terrain, 7);
   }
@@ -382,6 +382,7 @@ describe('seasons, spoilage, salt and fire', () => {
     for (let t = 0; t < seconds; t += 1) {
       game.player.hunger = 100;
       game.player.thirst = 100;
+      game.player.hp = 100; // nights without a fire must not kill the player in these food tests
       run(game, 1);
     }
   }
@@ -442,7 +443,9 @@ describe('seasons, spoilage, salt and fire', () => {
     const p = game.player;
     addItem(p.inv, 'stone', 4);
     addItem(p.inv, 'wood', 2);
-    expect(game.place('salt_pan', p.x, p.z - 3)).toBe(false); // inland: no sea water
+    // Inland, far from the sea: no water for the pan.
+    const inland = game.terrain.home;
+    expect(game.canPlace('salt_pan', inland.x, inland.z)).toBe(false);
     // Find a beach spot by the sea.
     let placed = false;
     for (let r = 1; r < 40 && !placed; r += 0.5) {
@@ -515,7 +518,7 @@ describe('seasons, spoilage, salt and fire', () => {
 
 describe('0.4: pot, backpack, fuel, bow, cellar, hut, fishing', () => {
   function newGame() {
-    const { state, terrain } = createWorld(settings);
+    const { state, terrain } = createWorld(settings, { camp: false });
     state.entities = state.entities.filter((e) => e.kind !== 'boar');
     return new Game(state, terrain, 11);
   }
@@ -587,7 +590,7 @@ describe('0.4: pot, backpack, fuel, bow, cellar, hut, fishing', () => {
   });
 
   it('the bow hits a boar from a distance and uses arrows', () => {
-    const { state, terrain } = createWorld(settings);
+    const { state, terrain } = createWorld(settings, { camp: false });
     const game = new Game(state, terrain, 3);
     const p = game.player;
     const boar = state.entities.find((e) => e.kind === 'boar')!;
@@ -622,8 +625,12 @@ describe('0.4: pot, backpack, fuel, bow, cellar, hut, fishing', () => {
     addItem(p.inv, 'wood', 8);
     addItem(p.inv, 'stone', 6);
     addItem(p.inv, 'rope', 3);
-    expect(game.place('chest', p.x + 1.6, p.z)).toBe(true);
-    expect(game.place('cellar', p.x - 1.8, p.z)).toBe(true);
+    const put = (kind: 'chest' | 'cellar') => {
+      for (let r = 1.6; r < 6; r += 0.4) for (let a = 0; a < 6.28; a += 0.3) if (game.place(kind, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r)) return true;
+      return false;
+    };
+    expect(put('chest')).toBe(true);
+    expect(put('cellar')).toBe(true);
     const chest = game.state.entities.find((e) => e.kind === 'chest')!;
     const cellar = game.state.entities.find((e) => e.kind === 'cellar')!;
     expect(cellar.slots!.length).toBe(12);
@@ -693,5 +700,21 @@ describe('0.4: pot, backpack, fuel, bow, cellar, hut, fishing', () => {
     expect(game.fishing).not.toBeNull();
     expect(game.bobber).not.toBeNull();
     expect(game.terrain.sailable(game.bobber!.x, game.bobber!.z)).toBe(true);
+  });
+});
+
+describe('starter camp', () => {
+  it('lays out the camp from the reference: sea on the left, raft, rocks, fire, lean-to, chest, cliffs', () => {
+    for (const seedText of ['бухта-1234', 'a', 'риф-5']) {
+      const { state, terrain } = createWorld({ ...settings, seedText });
+      const p = state.player;
+      const near = (kind: string) => state.entities.filter((e) => e.kind === kind && Math.hypot(e.x - p.x, e.z - p.z) < 12);
+      for (const k of ['campfire', 'shelter', 'chest', 'cliff', 'boulder', 'raft']) expect(near(k).length, `${seedText}: ${k}`).toBeGreaterThan(0);
+      expect(terrain.shoreWest(p.x, p.z)).not.toBeNull();
+      const raft = near('raft')[0];
+      expect(terrain.sailable(raft.x, raft.z)).toBe(true);
+      expect(raft.x).toBeLessThan(p.x); // the sea is to the west (left of the screen)
+      expect(near('campfire')[0].fuel).toBeGreaterThan(0);
+    }
   });
 });

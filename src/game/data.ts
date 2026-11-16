@@ -122,7 +122,7 @@ export type StructureKind = 'campfire' | 'chest' | 'shelter' | 'rain_catcher' | 
 
 export type ResourceKind =
   | 'palm' | 'tree' | 'stump' | 'sapling' | 'grass_tuft' | 'berry_bush'
-  | 'boulder' | 'flint_ground' | 'driftwood' | 'coconut_ground' | 'pond' | 'vines' | 'nest';
+  | 'boulder' | 'flint_ground' | 'driftwood' | 'coconut_ground' | 'pond' | 'vines' | 'nest' | 'cliff' | 'stones';
 
 export type EntityKind = ResourceKind | StructureKind | 'boar' | 'drop';
 
@@ -156,6 +156,8 @@ export const RESOURCES: Record<ResourceKind, ResourceDef> = {
   coconut_ground: { name: 'Кокос', verb: 'Подобрать', work: 1, yields: { coconut: 1 } },
   pond: { name: 'Пресный пруд', verb: 'Попить', work: 1, yields: {} },
   vines: { name: 'Лианы', verb: 'Нарезать лиан', work: 2, yields: { rope: 1 }, regrowDays: 2 },
+  cliff: { name: 'Скала', tool: 'pickaxe', verb: 'Добыть камень', work: 12, yields: { stone: 6, flint: 2 }, solid: 1.0 },
+  stones: { name: 'Камни', verb: 'Подобрать камни', work: 1, yields: { stone: 2 } },
   nest: { name: 'Гнездо чайки', verb: 'Взять яйца', work: 1, yields: { egg: 2 }, regrowDays: 2 },
 };
 

@@ -70,6 +70,8 @@ export class Game {
   bobber: { x: number; z: number } | null = null;
   /** Arrows in flight, for rendering. */
   projectiles: Projectile[] = [];
+  /** What the last action pulse was, so the hero can show the right pose. */
+  action: 'chop' | 'mine' | 'pick' | 'strike' | 'thrust' | 'shoot' | 'eat' = 'pick';
   /** 0..1 strength of the current storm, for rendering. */
   storm = 0;
   /** 0..1 strength of rain (showers in the rainy season, or a storm). */
@@ -467,6 +469,7 @@ export class Game {
         return false;
       }
       e.burn = 0;
+      this.action = 'pick';
       this.actionPulse = 0.3;
       this.actCd = 0.5;
       this.say('Потушили');
@@ -478,6 +481,7 @@ export class Game {
       if (n > 0) {
         this.give('salt', n, e);
         e.salt = (e.salt ?? 0) - n;
+        this.action = 'pick';
         this.actionPulse = 0.3;
       }
       this.actCd = 0.5;
@@ -519,6 +523,7 @@ export class Game {
       p.thirst = Math.min(100, p.thirst + 25);
       e.water = (e.water ?? 0) - 1;
       e.water -= this.fillFlasks(Math.floor(e.water));
+      this.action = 'eat';
       this.actionPulse = 0.3;
       this.actCd = 0.6;
       return false;
@@ -535,6 +540,7 @@ export class Game {
 
     if (e.kind === 'pond') {
       p.thirst = Math.min(100, p.thirst + 30);
+      this.action = 'pick';
       this.actionPulse = 0.3;
       this.actCd = 0.6;
       this.say(this.fillFlasks(99) > 0 ? 'Вы попили и наполнили флягу' : 'Вы попили пресной воды');
@@ -544,6 +550,7 @@ export class Game {
       this.say(def.tool === 'axe' ? 'Нужен топор: ветки + кремень' : 'Нужна кирка: 2 ветки + 2 кремня');
       return false;
     }
+    this.action = def.tool === 'axe' ? 'chop' : def.tool === 'pickaxe' ? 'mine' : 'pick';
     this.actionPulse = 0.3;
     this.actCd = def.tool ? 0.5 : 0.45;
     this.emit({ type: 'hit', x: e.x, z: e.z });
@@ -598,6 +605,7 @@ export class Game {
       const cooked = ITEMS[slot.item].cooksInto!;
       removeItem(p.inv, slot.item, 1);
       this.give(cooked, 1, e);
+      this.action = 'pick';
       this.actionPulse = 0.3;
       this.actCd = 0.8;
       this.say(`Готово: ${ITEMS[cooked].name}`);
@@ -611,6 +619,7 @@ export class Game {
     const amount = ITEMS[fuel.item].fuel ?? 0;
     removeItem(p.inv, fuel.item, 1);
     e.fuel = Math.min(CAMPFIRE_MAX_FUEL, (e.fuel ?? 0) + amount);
+    this.action = 'pick';
     this.actionPulse = 0.3;
     this.actCd = 0.4;
     return false;
@@ -649,6 +658,7 @@ export class Game {
     if (fire && def.fuel && !def.food) {
       fire.fuel = Math.min(CAMPFIRE_MAX_FUEL, (fire.fuel ?? 0) + def.fuel);
       this.takeOne(index);
+      this.action = 'pick';
       this.actionPulse = 0.3;
       this.say(`В костёр: ${def.name}`);
       return;
@@ -678,6 +688,7 @@ export class Game {
       p.thirst = Math.max(0, Math.min(100, p.thirst + (f.thirst ?? 0)));
       p.hp = Math.max(1, Math.min(100, p.hp + (f.health ?? 0) + sick));
       this.takeOne(index);
+      this.action = 'eat';
       this.actionPulse = 0.3;
       if (s.item === 'rot') this.say('Фу! Гниль есть нельзя');
       else if ((f.health ?? 0) < 0) this.say('Сырое вредно: живот болит');
@@ -691,6 +702,7 @@ export class Game {
       }
       s.durability = (s.durability ?? 0) - 1;
       p.thirst = Math.min(100, p.thirst + 25);
+      this.action = 'eat';
       this.actionPulse = 0.3;
       return;
     }
@@ -728,6 +740,7 @@ export class Game {
     for (const i of indices) this.takeOne(i);
     fire.fuel = Math.max(1, (fire.fuel ?? 0) - 10);
     this.give(dish, 1, p);
+    this.action = 'pick';
     this.actionPulse = 0.3;
     this.say(`Сварено: ${ITEMS[dish].name}`);
     return dish;
@@ -966,6 +979,7 @@ export class Game {
     const p = this.player;
     if (p.hand?.item === 'bow') return this.shoot(e);
     const dmg = p.hand ? ITEMS[p.hand.item].damage ?? 5 : 5;
+    this.action = p.hand?.item === 'spear' ? 'thrust' : 'strike';
     this.actionPulse = 0.3;
     this.actCd = 0.6;
     this.emit({ type: 'hit', x: e.x, z: e.z });
@@ -1006,6 +1020,7 @@ export class Game {
     }
     const d = Math.hypot(e.x - p.x, e.z - p.z);
     this.facing = e.x >= p.x ? 1 : -1;
+    this.action = 'shoot';
     this.actionPulse = 0.3;
     this.actCd = 1.0;
     this.projectiles.push({ x0: p.x, z0: p.z, x1: e.x, z1: e.z, t: 0, dur: Math.max(0.15, d / 22) });
@@ -1234,6 +1249,7 @@ export class Game {
       this.say('Удочка сломалась');
       p.hand = null;
     }
+    this.action = 'pick';
     this.actionPulse = 0.3;
   }
 

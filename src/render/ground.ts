@@ -7,10 +7,10 @@ const PX = 6; // canvas pixels per world unit
 const COLORS: Record<Biome, [number, number, number]> = {
   deep: [0, 0, 0],
   shallow: [0, 0, 0],
-  sand: [233, 213, 160],
-  grass: [138, 178, 84],
-  forest: [96, 140, 64],
-  rock: [160, 152, 136],
+  sand: [218, 178, 120],
+  grass: [150, 140, 76],
+  forest: [110, 118, 62],
+  rock: [150, 140, 122],
 };
 
 /**
@@ -65,7 +65,7 @@ export function paintGround(terrain: Terrain): HTMLCanvasElement {
       const o = (py * size + px) * 4;
       // Under water: plain wet sand. Whether it shows is decided by the shader from the height map.
       if (h < -0.03) {
-        d[o] = 190; d[o + 1] = 170; d[o + 2] = 130; d[o + 3] = 255;
+        d[o] = 178; d[o + 1] = 150; d[o + 2] = 104; d[o + 3] = 255;
         continue;
       }
       // Warp the lookup a little so borders wander like brush edges.
@@ -125,8 +125,8 @@ export function paintGround(terrain: Terrain): HTMLCanvasElement {
     if (terrain.inPond(x, z)) continue;
     const px = x * PX;
     const py = z * PX;
-    if (b === 'grass' || b === 'forest') {
-      ctx.strokeStyle = b === 'grass' ? 'rgba(80,120,44,0.55)' : 'rgba(58,92,40,0.55)';
+    if (b === 'forest' || (b === 'grass' && rng() < 0.25)) {
+      ctx.strokeStyle = b === 'grass' ? 'rgba(96,100,44,0.45)' : 'rgba(62,76,34,0.5)';
       ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.moveTo(px, py);

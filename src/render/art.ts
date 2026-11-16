@@ -410,14 +410,34 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
 export interface LoadedSprite {
   def: SpriteDef;
-  canvas: HTMLCanvasElement;
+  canvas: HTMLCanvasElement | HTMLImageElement;
+  /** Painted art (from public/art) rather than a vector placeholder. */
+  painted?: boolean;
+  /** Fractions of the sprite: feet x from the left; hand position for hero poses (y from the bottom). */
+  footX?: number;
+  handX?: number;
+  handY?: number;
 }
 
-/** Rasterises all sprites and item icons. Item icons are also available as sprites "item_<id>". */
-export async function loadArt(): Promise<Record<string, LoadedSprite>> {
+export interface Art {
+  sprites: Record<string, LoadedSprite>;
+  /** Painted ground textures (e.g. "ground_grass"), when available. */
+  textures: Record<string, HTMLImageElement>;
+}
+
+interface Manifest {
+  sprites: Record<string, { file: string; w: number; h: number; size: number; footX?: number; handX?: number; handY?: number }>;
+  textures: Record<string, { file: string }>;
+}
+
+/**
+ * Rasterises all placeholder sprites and item icons (icons are also sprites "item_<id>"),
+ * then loads painted art listed in public/art/manifest.json, which replaces placeholders of the same key.
+ */
+export async function loadArt(): Promise<Art> {
   const all: Record<string, SpriteDef> = { ...SPRITES };
   for (const key of ITEM_KEYS) all[`item_${key}`] = { w: 96, h: 96, size: 0.75, body: ITEM_ART[key] };
-  const out: Record<string, LoadedSprite> = {};
+  const sprites: Record<string, LoadedSprite> = {};
   await Promise.all(
     Object.entries(all).map(async ([key, def]) => {
       const img = await loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(toSvg(def)));
@@ -425,8 +445,34 @@ export async function loadArt(): Promise<Record<string, LoadedSprite>> {
       canvas.width = def.w * 2;
       canvas.height = def.h * 2;
       canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-      out[key] = { def, canvas };
+      sprites[key] = { def, canvas };
     }),
   );
-  return out;
+  const textures: Record<string, HTMLImageElement> = {};
+  const base = import.meta.env.BASE_URL;
+  try {
+    const res = await fetch(`${base}art/manifest.json`);
+    if (res.ok) {
+      const m = (await res.json()) as Manifest;
+      await Promise.all([
+        ...Object.entries(m.sprites).map(async ([key, e]) => {
+          const img = await loadImage(base + e.file);
+          sprites[key] = {
+            def: { w: e.w, h: e.h, size: e.size, body: '' },
+            canvas: img,
+            painted: true,
+            footX: e.footX,
+            handX: e.handX,
+            handY: e.handY,
+          };
+        }),
+        ...Object.entries(m.textures).map(async ([key, e]) => {
+          textures[key] = await loadImage(base + e.file);
+        }),
+      ]);
+    }
+  } catch (e) {
+    console.warn('Painted art not loaded, using placeholders', e);
+  }
+  return { sprites, textures };
 }

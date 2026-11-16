@@ -1,0 +1,126 @@
+{
+ "sprites": {
+  "hero_front": {
+   "file": "art/hero_front.png",
+   "w": 239,
+   "h": 640,
+   "size": 1.75,
+   "footX": 0.556
+  },
+  "hero_side": {
+   "file": "art/hero_side.png",
+   "w": 226,
+   "h": 640,
+   "size": 1.75,
+   "footX": 0.712
+  },
+  "hero_back": {
+   "file": "art/hero_back.png",
+   "w": 276,
+   "h": 640,
+   "size": 1.75,
+   "footX": 0.471
+  },
+  "pose_swing_up": {
+   "file": "art/pose_swing_up.png",
+   "w": 260,
+   "h": 640,
+   "size": 1.95,
+   "footX": 0.7,
+   "handX": 0.446,
+   "handY": 0.994
+  },
+  "pose_swing_down": {
+   "file": "art/pose_swing_down.png",
+   "w": 443,
+   "h": 640,
+   "size": 1.55,
+   "footX": 0.393,
+   "handX": 0.989,
+   "handY": 0.523
+  },
+  "pose_thrust": {
+   "file": "art/pose_thrust.png",
+   "w": 422,
+   "h": 640,
+   "size": 1.6,
+   "footX": 0.358,
+   "handX": 0.988,
+   "handY": 0.702
+  },
+  "pose_hold_forward": {
+   "file": "art/pose_hold_forward.png",
+   "w": 396,
+   "h": 640,
+   "size": 1.75,
+   "footX": 0.424,
+   "handX": 0.987,
+   "handY": 0.777
+  },
+  "pose_pickup": {
+   "file": "art/pose_pickup.png",
+   "w": 391,
+   "h": 640,
+   "size": 1.15,
+   "footX": 0.488,
+   "handX": 0.77,
+   "handY": 0.008
+  },
+  "pose_paddle": {
+   "file": "art/pose_paddle.png",
+   "w": 457,
+   "h": 640,
+   "size": 1.15,
+   "footX": 0.498,
+   "handX": 0.967,
+   "handY": 0.434
+  },
+  "tent": {
+   "file": "art/tent.png",
+   "w": 871,
+   "h": 640,
+   "size": 2.3,
+   "footX": 0.484
+  },
+  "boulder_1": {
+   "file": "art/boulder_1.png",
+   "w": 712,
+   "h": 640,
+   "size": 1.5,
+   "footX": 0.53
+  },
+  "boulder_2": {
+   "file": "art/boulder_2.png",
+   "w": 777,
+   "h": 640,
+   "size": 1.3,
+   "footX": 0.519
+  },
+  "boulder_3": {
+   "file": "art/boulder_3.png",
+   "w": 700,
+   "h": 640,
+   "size": 1.4,
+   "footX": 0.495
+  },
+  "cliff_1": {
+   "file": "art/cliff_1.png",
+   "w": 564,
+   "h": 640,
+   "size": 3.2,
+   "footX": 0.559
+  },
+  "stones_1": {
+   "file": "art/stones_1.png",
+   "w": 727,
+   "h": 364,
+   "size": 0.55,
+   "footX": 0.287
+  }
+ },
+ "textures": {
+  "ground_grass": {
+   "file": "art/ground_grass.jpg"
+  }
+ }
+}

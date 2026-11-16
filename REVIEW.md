@@ -22,3 +22,11 @@
   - камни: `boulder_1` ← round_c (гранёный, ближе всех к эталону по форме), `boulder_2` ← slab_b (глыба за лагерем), `boulder_3` ← stones_small_c (кучка, жирный контур как на эталоне). Все камни светлее и «золотее» эталона — при вставке подгонять цвет (темнее, серо-коричневее); ждём ещё валун по последнему запросу.
   - трава: `ground_grass` ← grass_e (тёплый оливково-жёлтый, ближе всех к эталону). У всех вариантов тёмные края — при повторе видна сетка; убираем программно (выравнивание яркости + бесшовная склейка).
 - **Валуны по новому запросу (тёмные, гранёные, жирный контур, ракушки) утверждены** как `boulder_1..3`: на пляже эталона стоят как родные (сверка: `boulder_ink_check`). Вывод для всех следующих запросов: фразы «hand-painted illustration, NOT photorealistic, NOT 3D render, bold dark-brown ink outlines, flat painted shading in 2-3 tones» убирают «золотой фотореализм». Высокая глыба `slab_b` → `cliff_1`, кучка `stones_small_c` → `stones_1` (их цвет подгоняем программно).
+
+## 2026-11-16 — Bay scene assembled with painted art
+- Start bay is now sculpted into the terrain (every seed): sea along the left, beach ~2 m, meadow rising to the right; the rest of the island stays random.
+- Hero: front/side/back by walking direction, legs animated in the shader (one painted frame per view), action poses for chop/mine/strike/thrust/shoot/pick, paddle pose on the raft, tool held at the painted hand.
+- Silhouette shadows: each sprite laid on the ground to the lower left (sun from the right), soft at the far end, longer towards evening, gone at night and in storms.
+- Camera 46°, closer (hero ≈ ¼ of the screen height). Light warm all day, golden in the afternoon. Vignette.
+- Grass texture applied on grassy ground; wind sway for trees, bushes, grass (stronger in storms).
+- Compared with docs/reference/camp_target.webp: layout and scale match; missing are painted trees, bushes, tufts, campfire, chest, raft, sand texture.
