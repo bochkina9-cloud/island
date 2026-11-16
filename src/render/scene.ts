@@ -8,6 +8,8 @@ import { paintGround } from './ground';
 
 const PITCH = (46 * Math.PI) / 180;
 const MAX_LIGHTS = 8;
+/** Height of the logs in the painted campfire, as a fraction of the sprite. */
+const FLAME_AT = 0.27;
 /**
  * Sun from the right and in front of the scene: shadows fall to the left and a little away from
  * the camera, so they tuck in behind the feet as in the reference (towards the camera they look detached).
@@ -26,6 +28,8 @@ const TOOL_ANGLE: Record<string, number> = {
   pose_pickup: -1.2,
   pose_paddle: -2.2,
 };
+/** Slim upright things: their shadow is thrown like a person's (see placeCast). */
+const ROUND = new Set(['tree', 'palm', 'sapling', 'grass_tuft', 'boar', 'torch_post', 'vines']);
 /** Things that bend in the wind, and how much. */
 const SWAY: Partial<Record<string, number>> = { palm: 0.6, tree: 0.5, sapling: 1, grass_tuft: 1.4, berry_bush: 0.7, vines: 0.8 };
 
@@ -479,16 +483,28 @@ export class WorldView {
    * footprint, which for a picture drawn from above lies behind the bottom edge of the sprite;
    * starting at the bottom edge would put half the shadow in front and make things seem to hover.
    */
-  private placeCast(m: THREE.Mesh, x: number, z: number, mirror: number, width: number) {
+  private placeCast(m: THREE.Mesh, x: number, z: number, mirror: number, width: number, round: boolean) {
     const len = this.castLength;
-    const back = width * 0.45;
     m.matrixAutoUpdate = false;
-    m.matrix.set(
-      -SUN_DIR.z * mirror, SUN_DIR.x * len, 0, x,
-      0, 0, 1, 0.012,
-      SUN_DIR.x * mirror, SUN_DIR.z * len, 0, z - back,
-      0, 0, 0, 1,
-    );
+    if (round) {
+      const back = width * 0.45;
+      m.matrix.set(
+        -SUN_DIR.z * mirror, SUN_DIR.x * len, 0, x,
+        0, 0, 1, 0.012,
+        SUN_DIR.x * mirror, SUN_DIR.z * len, 0, z - back,
+        0, 0, 0, 1,
+      );
+    } else {
+      // Broad, solid things (rocks, the tent): the width stays along the object and the shadow
+      // spreads from its base to the left, so it touches the ground line instead of hanging
+      // beside the object's upper half.
+      m.matrix.set(
+        mirror, SUN_DIR.x * len, 0, x,
+        0, 0, 1, 0.012,
+        0, SUN_DIR.z * len * 0.6, 0, z - 0.05,
+        0, 0, 0, 1,
+      );
+    }
     m.matrixWorldNeedsUpdate = true;
   }
 
@@ -874,7 +890,7 @@ export class WorldView {
       // Contact shadow under the footprint: painted objects stand on ground that reaches behind their base line.
       v.shadow.position.set(e.x, 0.02, e.z - v.shadowDepth);
       if (v.cast.visible) {
-        this.placeCast(v.cast, e.x, e.z, sx, v.width);
+        this.placeCast(v.cast, e.x, e.z, sx, v.width, ROUND.has(e.kind));
         this.placeAo(v.ao, e.x, e.z, sx, this.size(v.key).h);
       }
       const onFire = (e.burn ?? 0) > 0;
@@ -898,8 +914,13 @@ export class WorldView {
         v.flame.visible = burning;
         if (burning) {
           const k = 0.45 + 0.55 * Math.min(1, (e.fuel ?? 0) / 120);
-          v.flame.position.set(e.x, 0.15, e.z + 0.02);
-          v.flame.scale.set(k * (1 + Math.sin(this.clock * 17 + e.id) * 0.06), k * (1 + Math.sin(this.clock * 11) * 0.1), 1);
+          // Over the logs in the middle of the painted fire ring: up the sprite's plane by
+          // FLAME_AT of its height, then a little towards the camera so the flame is in front.
+          const s = this.size(v.key).h * (this.sprites[v.key].painted ? FLAME_AT : 0.1);
+          v.flame.position.set(e.x, s * Math.cos(PITCH) + 0.06 * Math.sin(PITCH), e.z - s * Math.sin(PITCH) + 0.06 * Math.cos(PITCH));
+          // A small fire under the pot, as in the reference (the painted ring is much smaller than the old one).
+          const f = this.sprites[v.key].painted ? 0.4 : 1;
+          v.flame.scale.set(f * k * (1 + Math.sin(this.clock * 17 + e.id) * 0.06), f * k * (1 + Math.sin(this.clock * 11) * 0.1), 1);
         }
       }
     }
@@ -988,7 +1009,7 @@ export class WorldView {
     h.shadow.position.set(p.x, 0.02, p.z - 0.12);
     h.shadow.visible = false;
     h.cast.visible = !sailing;
-    this.placeCast(h.cast, p.x, p.z, mirror, 0.45);
+    this.placeCast(h.cast, p.x, p.z, mirror, 0.45, true);
     this.heroAo.geometry = h.cast.geometry;
     this.heroAo.visible = !sailing;
     this.placeAo(this.heroAo, p.x, p.z, mirror, 1.75);

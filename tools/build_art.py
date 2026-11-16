@@ -41,6 +41,7 @@ ASSETS = {
     'pose_hold_forward': ('pose_hold_forward', 1.75, HERO),
     'pose_pickup': ('pose_pickup', 1.15, HERO),
     'pose_paddle': ('pose_paddle', 1.15, HERO),
+    'campfire': ('campfire', 1.5, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0}),
     'tent': ('tent', 2.0, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}),
     'boulder_1': ('boulder_1', 1.05, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
     'boulder_2': ('boulder_2', 0.9, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),

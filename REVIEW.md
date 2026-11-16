@@ -51,3 +51,7 @@
 - Grass tufts: all four used (66 with the watermark cropped off). The first grading made them grey; they are used as painted. Magenta bled into the dark leaf litter: cut.py now pulls magenta casts back towards green everywhere, and for grass (strict mode) drops purple pixels entirely.
 - Grass tufts grow around the bases of rocks, trees, the tent, the chest; pebbles at the bases of rocks on sand; tufts scattered over meadows. Interactive grass uses the same four sprites (cut grass = stubble).
 - Decor (tufts, shells, pebbles) is instanced: one draw per sprite, thousands of pieces. Wind sways each tuft out of step, phase from its position.
+
+## 2026-11-16 — Big rocks; campfire
+- The cliff still looked pasted on: its "round" shadow, pushed back under the footprint, showed beside the rock's upper half on screen while the ground at its base stayed lit. Two shadow modes now: slim upright things (hero, trees, palms, saplings, tufts) keep the round shadow; broad solid things (rocks, cliff, tent, chest, bushes, campfire) get a shadow that spreads from the base line to the left.
+- Campfire: 74 chosen (ink outlines, rope lashings, closest to the reference style); 71–73 kept as candidates (72/73 too rendered, 71 good but busier). The flame sits over the painted logs and is small, as in the reference; the pot stays visible.

@@ -75,6 +75,13 @@
    "handX": 0.967,
    "handY": 0.434
   },
+  "campfire": {
+   "file": "art/campfire.png",
+   "w": 517,
+   "h": 640,
+   "size": 1.5,
+   "footX": 0.544
+  },
   "tent": {
    "file": "art/tent.png",
    "w": 871,
