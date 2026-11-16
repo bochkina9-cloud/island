@@ -48,6 +48,11 @@ ASSETS = {
     # Earlier, sunnier generations: pulled down to the reference's grey-brown.
     'cliff_1': ('cliff_1', 2.6, {'gain': 0.74, 'sat': 0.8, 'warm': 0.0}),
     'stones_1': ('stones_1', 0.45, {'gain': 0.68, 'sat': 0.7, 'warm': -0.05}),
+    # Grass tufts: all four kept for variety; colours as painted (they already match the reference).
+    'tuft_1': ('tuft_1', 0.5, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}),
+    'tuft_2': ('tuft_2', 0.5, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}),
+    'tuft_3': ('tuft_3', 0.45, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}),
+    'tuft_4': ('tuft_4', 0.45, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}),
 }
 TEXTURES = {
     'ground_grass': 'ground_grass',
@@ -168,7 +173,7 @@ def main() -> None:
     manifest = {'sprites': {}, 'textures': {}}
     tmp = os.path.join(OUT, '_cut.png')
     for key, (src, height, g) in ASSETS.items():
-        cut(find(src), tmp)
+        cut(find(src), tmp, strict=g.get('strict', False))
         im = Image.open(tmp)
         im = grade(im, g['gain'], g['sat'], g['warm'])
         if im.size[1] > MAX_SPRITE_HEIGHT:

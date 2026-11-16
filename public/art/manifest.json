@@ -117,6 +117,34 @@
    "size": 0.45,
    "footX": 0.287
   },
+  "tuft_1": {
+   "file": "art/tuft_1.png",
+   "w": 752,
+   "h": 640,
+   "size": 0.5,
+   "footX": 0.501
+  },
+  "tuft_2": {
+   "file": "art/tuft_2.png",
+   "w": 618,
+   "h": 640,
+   "size": 0.5,
+   "footX": 0.463
+  },
+  "tuft_3": {
+   "file": "art/tuft_3.png",
+   "w": 597,
+   "h": 640,
+   "size": 0.45,
+   "footX": 0.483
+  },
+  "tuft_4": {
+   "file": "art/tuft_4.png",
+   "w": 612,
+   "h": 640,
+   "size": 0.45,
+   "footX": 0.47
+  },
   "shell_1": {
    "file": "art/shell_1.png",
    "w": 153,

@@ -45,3 +45,9 @@
 - Cause 3: scale. Boulders 1.5 → ~1.0 m, cliff 3.2 → 2.6 m, tent 2.3 → 2.0 m, stones 0.55 → 0.45 m; the hero stays 1.75 m (reference proportions).
 - Pebbles: sheet 64 chosen (12 pebbles, varied sizes); 62, 63 kept as candidates. Pebbles keep their relative sizes; scattered on beaches and sparsely in grass.
 - Still to come for grounding: grass tufts around the bases of rocks and trees (as in the reference), once the tuft art arrives.
+
+## 2026-11-16 — Grounding, part 2; grass tufts
+- Tent and big rocks still floated: the contact blob was hidden behind them. Added a footprint shadow: the object's own silhouette squashed straight back from its bottom edge, slightly wider and a touch in front, so a soft dark rim follows the object's real outline (mat edges, pole feet, rock sides).
+- Grass tufts: all four used (66 with the watermark cropped off). The first grading made them grey; they are used as painted. Magenta bled into the dark leaf litter: cut.py now pulls magenta casts back towards green everywhere, and for grass (strict mode) drops purple pixels entirely.
+- Grass tufts grow around the bases of rocks, trees, the tent, the chest; pebbles at the bases of rocks on sand; tufts scattered over meadows. Interactive grass uses the same four sprites (cut grass = stubble).
+- Decor (tufts, shells, pebbles) is instanced: one draw per sprite, thousands of pieces. Wind sways each tuft out of step, phase from its position.

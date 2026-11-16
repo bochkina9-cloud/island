@@ -14,7 +14,8 @@ from PIL import Image
 NEAR, FAR = 22.0, 60.0  # colour distance: below NEAR = background, above FAR = object
 
 
-def cut(src: str, dst: str, pad: int = 6) -> None:
+def cut(src: str, dst: str, pad: int = 6, strict: bool = False) -> None:
+    """strict: also drop purple pixels inside the object (only for art with no purple of its own, e.g. grass)."""
     im = Image.open(src).convert('RGB')
     a = np.asarray(im).astype(np.float32)
     b = 12
@@ -26,7 +27,16 @@ def cut(src: str, dst: str, pad: int = 6) -> None:
     k = np.maximum(alpha, 1e-3)[..., None]
     rgb = np.clip((a - (1 - k) * bg) / k, 0, 255)
     rgb = np.where(alpha[..., None] > 0, rgb, 0)
-    rgba = np.dstack([rgb, alpha * 255]).astype(np.uint8)
+    # Magenta cast inside the object (generators let the background bleed into dark litter, hair...):
+    # where both red and blue stand above green, pull them back towards green.
+    if bg[0] > bg[1] + 60 and bg[2] > bg[1] + 30:
+        cast = np.clip(np.minimum(rgb[..., 0], rgb[..., 2]) - rgb[..., 1], 0, None)
+        rgb[..., 0] -= cast * 0.85
+        rgb[..., 2] -= cast * 0.85
+        if strict:
+            purple = np.clip(np.minimum(a[..., 0] - a[..., 1] - 20, a[..., 2] - a[..., 1] + 10) / 30, 0, 1)
+            alpha = alpha * (1 - purple)
+    rgba = np.dstack([np.clip(rgb, 0, 255), alpha * 255]).astype(np.uint8)
     ys, xs = np.where(alpha > 0.05)
     if len(xs) == 0:
         raise SystemExit(f'{src}: nothing left after removing the background')

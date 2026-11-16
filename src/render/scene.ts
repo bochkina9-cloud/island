@@ -69,14 +69,24 @@ const LIGHT_GLSL = /* glsl */ `
 
 const SPRITE_VERT = /* glsl */ `
   uniform float uSway;
+  uniform float uWindAmp;
+  uniform float uTime;
+  uniform float uStorm;
   varying vec2 vUv;
   varying vec3 vWorld;
   void main() {
     vUv = uv;
-    // Wind: the top leans, the base stays put.
+    // Wind: the top leans, the base stays put. uSway is set per object; uWindAmp lets shared
+    // materials (decor grass) sway out of step, with the phase taken from where each one stands.
+    mat4 mm = modelMatrix;
+    #ifdef USE_INSTANCING
+      mm = modelMatrix * instanceMatrix;
+    #endif
     vec3 p = position;
-    p.x += uSway * p.y;
-    vec4 w = modelMatrix * vec4(p, 1.0);
+    vec3 o = mm[3].xyz;
+    float gust = sin(uTime * (1.3 + uStorm * 2.2) + o.x * 0.7 + o.z * 0.45) + 0.35 * sin(uTime * 2.9 + o.x * 1.3);
+    p.x += (uSway + uWindAmp * (0.03 + uStorm * 0.1) * gust) * p.y;
+    vec4 w = mm * vec4(p, 1.0);
     vWorld = w.xyz;
     gl_Position = projectionMatrix * viewMatrix * w;
   }
@@ -260,6 +270,8 @@ interface SpriteView {
   width: number;
   /** Silhouette cast on the ground. */
   cast: THREE.Mesh;
+  /** Dark footprint right under the object (same silhouette, squashed straight back). */
+  ao: THREE.Mesh;
   castMat: THREE.ShaderMaterial;
   key: string;
   flame?: THREE.Mesh;
@@ -295,6 +307,7 @@ export class WorldView {
   private arrows: THREE.Mesh[] = [];
   private heightTex!: THREE.DataTexture;
   private grassTex!: THREE.Texture;
+  private heroAo!: THREE.Mesh;
   private clock = 0;
   private sprites: Record<string, LoadedSprite>;
   zoom = 13;
@@ -386,7 +399,10 @@ export class WorldView {
     const cast = new THREE.Mesh(this.geometry('hero_front'), castMat);
     cast.renderOrder = 1;
     const shadow = this.makeShadow(0.6);
-    this.scene.add(group, shadow, cast);
+    const ao = new THREE.Mesh(cast.geometry, castMat);
+    ao.renderOrder = 1;
+    this.heroAo = ao;
+    this.scene.add(group, shadow, cast, ao);
     this.hero = { group, mesh, mat, shadow, cast, castMat, tool, toolMat, view: 'front', phase: 0, lastX: this.game.player.x, lastZ: this.game.player.z };
   }
 
@@ -476,6 +492,22 @@ export class WorldView {
     m.matrixWorldNeedsUpdate = true;
   }
 
+  /**
+   * The footprint: the silhouette squashed straight back from the bottom edge, a little wider and
+   * a touch in front, so a soft dark rim shows where the object meets the ground.
+   */
+  private placeAo(m: THREE.Mesh, x: number, z: number, mirror: number, height: number) {
+    const depth = Math.min(0.6, 1.0 / Math.max(0.3, height));
+    m.matrixAutoUpdate = false;
+    m.matrix.set(
+      mirror * 1.08, 0, 0, x,
+      0, 0, 1, 0.011,
+      0, -depth, 0, z + 0.05,
+      0, 0, 0, 1,
+    );
+    m.matrixWorldNeedsUpdate = true;
+  }
+
   private makeShadow(width: number): THREE.Mesh {
     const g = new THREE.PlaneGeometry(width, width * 0.5);
     g.rotateX(-Math.PI / 2);
@@ -551,20 +583,32 @@ export class WorldView {
     this.scene.add(m);
   }
 
-  /** Shells and pebbles on the beaches, a few pebbles in the grass: pure decoration, the same for a given seed. */
+  /**
+   * Decoration that nobody interacts with: shells and pebbles on the beaches, grass tufts in the
+   * meadows and around the bases of rocks, trees and the camp (as in the reference, grass hides
+   * the line where things meet the ground). The same for a given seed; drawn instanced.
+   */
   private buildDecor() {
     const painted = (prefix: string) => Array.from({ length: 12 }, (_, i) => `${prefix}_${i + 1}`).filter((k) => this.sprites[k]?.painted);
     const shells = painted('shell');
     const pebbles = painted('pebble');
-    const keys = [...shells, ...pebbles];
-    if (!keys.length) return;
+    const tufts = painted('tuft');
     const t = this.game.terrain;
-    const mats = new Map(keys.map((k) => [k, this.spriteMaterial(k)]));
     let seed = t.seed ^ 0x5eaf00d;
     const rnd = () => {
       seed = (seed * 1664525 + 1013904223) >>> 0;
       return seed / 4294967296;
     };
+    const items = new Map<string, THREE.Matrix4[]>();
+    const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(-PITCH, 0, 0));
+    const put = (list: string[], x: number, z: number, scale: number) => {
+      if (!list.length || t.inPond(x, z)) return;
+      const key = list[Math.floor(rnd() * list.length)];
+      const m = new THREE.Matrix4().compose(new THREE.Vector3(x, 0.01, z), tilt, new THREE.Vector3(rnd() < 0.5 ? -scale : scale, scale, scale));
+      (items.get(key) ?? items.set(key, []).get(key)!).push(m);
+    };
+    const grassy = (x: number, z: number) => t.height(x, z) > 0.075 && t.biome(x, z) !== 'rock';
+
     for (let z = 2; z < MAP_SIZE - 2; z += 1) {
       for (let x = 2; x < MAP_SIZE - 2; x += 1) {
         const r = rnd();
@@ -572,20 +616,35 @@ export class WorldView {
         const pz = z + rnd();
         const h = t.height(px, pz);
         const beach = h >= 0.008 && h <= 0.05;
-        const meadow = h > 0.05 && t.biome(px, pz) === 'grass';
-        let list: string[];
-        if (beach && r < 0.05 && shells.length) list = shells;
-        else if (beach && r < 0.12 && pebbles.length) list = pebbles;
-        else if (meadow && r < 0.012 && pebbles.length) list = pebbles;
-        else continue;
-        if (t.inPond(px, pz)) continue;
-        const key = list[Math.floor(rnd() * list.length)];
-        const m = new THREE.Mesh(this.geometry(key, 0.8 + rnd() * 0.5), mats.get(key)!);
-        m.rotation.x = -PITCH;
-        m.position.set(px, 0.01, pz);
-        if (rnd() < 0.5) m.scale.x = -1;
-        this.scene.add(m);
+        if (beach && r < 0.05) put(shells, px, pz, 0.8 + rnd() * 0.5);
+        else if (beach && r < 0.12) put(pebbles, px, pz, 0.8 + rnd() * 0.5);
+        else if (h > 0.05 && t.biome(px, pz) === 'grass' && r < 0.012) put(pebbles, px, pz, 0.8 + rnd() * 0.5);
+        else if (grassy(px, pz) && r < 0.1) put(tufts, px, pz, 0.7 + rnd() * 0.5);
       }
+    }
+    // Tufts at the foot of things, a little in front of their bottom edge so they overlap it.
+    const rooted = new Set(['boulder', 'cliff', 'stones', 'shelter', 'chest', 'tree', 'palm', 'berry_bush', 'sapling', 'rain_catcher', 'salt_pan']);
+    for (const e of this.game.state.entities) {
+      if (!rooted.has(e.kind)) continue;
+      const w = e.kind === 'tree' || e.kind === 'palm' ? 0.7 : this.size(this.keyFor(e)).w;
+      const n = 2 + Math.floor(rnd() * 3);
+      for (let i = 0; i < n; i++) {
+        const side = rnd() < 0.5 ? -1 : 1;
+        const x = e.x + side * w * (0.25 + rnd() * 0.3);
+        const z = e.z + 0.04 + rnd() * 0.18;
+        // Grass on the meadow, small pebbles on the sand.
+        if (grassy(x, z)) put(tufts, x, z, 0.6 + rnd() * 0.45);
+        else if (t.height(x, z) > 0.005) put(pebbles, x, z, 0.7 + rnd() * 0.6);
+      }
+    }
+    for (const [key, list] of items) {
+      const mat = this.spriteMaterial(key);
+      if (key.startsWith('tuft')) mat.uniforms.uWindAmp = { value: 1 };
+      const mesh = new THREE.InstancedMesh(this.geometry(key), mat, list.length);
+      list.forEach((m, i) => mesh.setMatrixAt(i, m));
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      this.scene.add(mesh);
     }
   }
 
@@ -630,7 +689,7 @@ export class WorldView {
       case 'stones': return 'stones_1';
       case 'shelter': return 'tent';
       case 'sapling': return e.regrowOn !== undefined ? 'sapling_bare' : 'sapling';
-      case 'grass_tuft': return e.regrowOn !== undefined ? 'grass_cut' : 'grass_tuft';
+      case 'grass_tuft': return `tuft_${(e.id % 4) + 1}`;
       case 'berry_bush': return e.regrowOn !== undefined ? 'berry_bush_empty' : 'berry_bush';
       case 'boar': return 'boar_0';
       case 'vines': return e.regrowOn !== undefined ? 'vines_cut' : 'vines';
@@ -665,7 +724,10 @@ export class WorldView {
         const cast = new THREE.Mesh(this.geometry(key, e.kind === 'drop' ? 0.7 : 1), castMat);
         cast.renderOrder = 1;
         cast.visible = e.kind !== 'drop' && e.kind !== 'raft';
-        v = { entity: e, mesh, mat, shadow, cast, castMat, key, shadowDepth: sw * 0.25 - 0.05, width: e.kind === 'palm' || e.kind === 'tree' ? 0.5 : w };
+        const ao = new THREE.Mesh(cast.geometry, castMat);
+        ao.renderOrder = 1;
+        shadow.visible = false;
+        v = { entity: e, mesh, mat, shadow, cast, castMat, ao, key, shadowDepth: sw * 0.25 - 0.05, width: e.kind === 'palm' || e.kind === 'tree' ? 0.5 : w };
         if (e.kind === 'campfire') {
           const fm = this.spriteMaterial('flame');
           fm.uniforms.uUnlit.value = 1;
@@ -673,7 +735,7 @@ export class WorldView {
           v.flame.rotation.x = -PITCH;
           this.scene.add(v.flame);
         }
-        this.scene.add(mesh, shadow, cast);
+        this.scene.add(mesh, shadow, cast, ao);
         this.views.set(e.id, v);
       }
       v.entity = e;
@@ -682,7 +744,7 @@ export class WorldView {
   }
 
   private removeView(v: SpriteView) {
-    this.scene.remove(v.mesh, v.shadow, v.cast);
+    this.scene.remove(v.mesh, v.shadow, v.cast, v.ao);
     if (v.flame) this.scene.remove(v.flame);
     if (v.fire) this.scene.remove(v.fire);
     v.mat.dispose();
@@ -775,6 +837,8 @@ export class WorldView {
       v.mesh.visible = !far;
       v.shadow.visible = !far;
       v.cast.visible = !far && e.kind !== 'drop' && e.kind !== 'raft';
+      v.ao.visible = v.cast.visible;
+      v.shadow.visible = false;
       if (v.flame) v.flame.visible = !far;
       if (far && e.kind !== 'boar') continue;
       let sx = 1;
@@ -798,6 +862,10 @@ export class WorldView {
         v.mesh.rotation.z = Math.sin(this.clock * 1.7 + e.id) * (0.02 + g.storm * 0.05);
         v.shadow.visible = false;
       } else if (e.kind === 'drop') {
+        // (handled below)
+      }
+      if (e.kind === 'grass_tuft' && e.regrowOn !== undefined) sy = 0.3; // cut down to stubble
+      if (e.kind === 'drop') {
         y = 0.05 + Math.sin(this.clock * 3 + e.id) * 0.04;
       }
       const wobble = (e.work ?? 0) > 0 ? Math.sin(this.clock * 40) * 0.03 : 0;
@@ -805,7 +873,10 @@ export class WorldView {
       v.mesh.scale.set(sx, sy, 1);
       // Contact shadow under the footprint: painted objects stand on ground that reaches behind their base line.
       v.shadow.position.set(e.x, 0.02, e.z - v.shadowDepth);
-      if (v.cast.visible) this.placeCast(v.cast, e.x, e.z, sx, v.width);
+      if (v.cast.visible) {
+        this.placeCast(v.cast, e.x, e.z, sx, v.width);
+        this.placeAo(v.ao, e.x, e.z, sx, this.size(v.key).h);
+      }
       const onFire = (e.burn ?? 0) > 0;
       if (onFire && !v.fire) {
         const fm = this.spriteMaterial('flame');
@@ -915,9 +986,12 @@ export class WorldView {
     // A slight sway of the shoulders while walking towards or away from the camera.
     h.mesh.rotation.z = walking && h.view !== 'side' ? stride * 0.025 : 0;
     h.shadow.position.set(p.x, 0.02, p.z - 0.12);
-    h.shadow.visible = !sailing;
+    h.shadow.visible = false;
     h.cast.visible = !sailing;
     this.placeCast(h.cast, p.x, p.z, mirror, 0.45);
+    this.heroAo.geometry = h.cast.geometry;
+    this.heroAo.visible = !sailing;
+    this.placeAo(this.heroAo, p.x, p.z, mirror, 1.75);
 
     // Tool in the fist.
     const hand = p.hand;
