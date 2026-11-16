@@ -182,6 +182,39 @@ const GROUND_FRAG = /* glsl */ `
   }
 `;
 
+/**
+ * A painted top-down background (the start bay). The painting gives shapes and colours;
+ * the shader adds grass detail, shimmering water, foam that breathes towards the shore,
+ * storm darkening, and fades the edges into the generated island.
+ */
+const BACKDROP_FRAG = /* glsl */ `
+  ${LIGHT_GLSL}
+  uniform sampler2D map;
+  uniform sampler2D uGrass;
+  uniform vec3 uGrassMean;
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  void main() {
+    vec3 c = texture2D(map, vUv).rgb;
+    float edge = smoothstep(0.0, 0.08, vUv.x) * smoothstep(1.0, 0.86, vUv.x)
+      * smoothstep(0.0, 0.12, vUv.y) * smoothstep(1.0, 0.88, vUv.y);
+    float water = smoothstep(0.0, 0.08, c.b - c.r);
+    float foam = smoothstep(0.7, 0.86, min(min(c.r, c.g), c.b));
+    float green = smoothstep(0.3, 0.42, (c.g - c.b) / max(c.g, 0.01)) * (1.0 - water);
+    vec3 detail = 1.0 + (texture2D(uGrass, vWorld.xz / 3.0).rgb / uGrassMean - 1.0) * 1.6;
+    vec3 col = c * mix(vec3(1.0), detail, green);
+    col = mix(col, applySeason(col), 1.0 - water);
+    // Water: slow light ripples and sparkles; foam brightens in waves running to the shore.
+    float w = sin(vWorld.x * 0.9 + uTime * 0.8) + sin(vWorld.z * 0.7 - uTime * 1.1) + sin((vWorld.x + vWorld.z) * 0.35 + uTime * 0.5);
+    col += vec3(0.022) * w * water;
+    float sp = sin(vWorld.x * 3.1 + uTime * 1.7) * sin(vWorld.z * 2.7 - uTime * 1.3);
+    col += vec3(0.1) * smoothstep(0.94, 1.0, sp) * water * (1.0 - foam);
+    col += vec3(0.1) * foam * sin(uTime * 1.6 - vWorld.x * 1.4 + sin(vWorld.z * 0.5));
+    col = mix(col, vec3(0.16, 0.30, 0.38), uStorm * 0.5 * water);
+    gl_FragColor = vec4(applyLight(col, vWorld), edge);
+  }
+`;
+
 const WATER_FRAG = /* glsl */ `
   ${LIGHT_GLSL}
   uniform sampler2D uHeight;
@@ -254,6 +287,7 @@ export class WorldView {
   private fishLine!: THREE.Line;
   private arrows: THREE.Mesh[] = [];
   private heightTex!: THREE.DataTexture;
+  private grassTex!: THREE.Texture;
   private clock = 0;
   private sprites: Record<string, LoadedSprite>;
   zoom = 13;
@@ -300,7 +334,9 @@ export class WorldView {
       depthWrite: false,
     });
 
+    this.buildBackdrop();
     this.buildHero();
+    this.buildDecor();
 
     // Fishing float and line.
     const bm = this.spriteMaterial('bobber');
@@ -443,6 +479,7 @@ export class WorldView {
       grass.anisotropy = 8;
       grass.needsUpdate = true;
     }
+    this.grassTex = grass;
     const mat = new THREE.ShaderMaterial({
       uniforms: {
         ...shared,
@@ -463,6 +500,63 @@ export class WorldView {
     const ground = new THREE.Mesh(g, mat);
     ground.renderOrder = 0;
     this.scene.add(ground);
+  }
+
+  /** The painted start bay, laid on the ground where the terrain was shaped after it. */
+  private buildBackdrop() {
+    const bay = this.art.backdrops.bay;
+    const at = this.game.terrain.bayPicture;
+    if (!bay || !at) return;
+    const tex = new THREE.Texture(bay.img);
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.anisotropy = 8;
+    tex.needsUpdate = true;
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        ...shared,
+        map: { value: tex },
+        uGrass: { value: this.grassTex },
+        uGrassMean: { value: new THREE.Vector3(...meanColor(this.art.textures.ground_grass)) },
+      },
+      vertexShader: SPRITE_VERT,
+      fragmentShader: BACKDROP_FRAG,
+      transparent: true,
+      depthWrite: false,
+    });
+    const g = new THREE.PlaneGeometry(at.size, at.size);
+    g.rotateX(-Math.PI / 2);
+    const m = new THREE.Mesh(g, mat);
+    m.position.set(at.x + at.size / 2, 0.006, at.z + at.size / 2);
+    m.renderOrder = 0.5;
+    this.scene.add(m);
+  }
+
+  /** Shells along the beaches: pure decoration, the same for a given seed. */
+  private buildDecor() {
+    const keys = [1, 2, 3, 4, 5, 6].map((i) => `shell_${i}`).filter((k) => this.sprites[k]?.painted);
+    if (!keys.length) return;
+    const t = this.game.terrain;
+    const mats = new Map(keys.map((k) => [k, this.spriteMaterial(k)]));
+    let seed = t.seed ^ 0x5eaf00d;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    for (let z = 2; z < MAP_SIZE - 2; z += 1) {
+      for (let x = 2; x < MAP_SIZE - 2; x += 1) {
+        const r = rnd();
+        const px = x + rnd();
+        const pz = z + rnd();
+        const h = t.height(px, pz);
+        if (h < 0.008 || h > 0.05 || r > 0.07) continue;
+        const key = keys[Math.floor(rnd() * keys.length)];
+        const m = new THREE.Mesh(this.geometry(key, 0.8 + rnd() * 0.5), mats.get(key)!);
+        m.rotation.x = -PITCH;
+        m.position.set(px, 0.01, pz);
+        if (rnd() < 0.5) m.scale.x = -1;
+        this.scene.add(m);
+      }
+    }
   }
 
   private buildWater(terrain: Terrain) {

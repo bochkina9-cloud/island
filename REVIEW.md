@@ -30,3 +30,11 @@
 - Camera 46°, closer (hero ≈ ¼ of the screen height). Light warm all day, golden in the afternoon. Vignette.
 - Grass texture applied on grassy ground; wind sway for trees, bushes, grass (stronger in storms).
 - Compared with docs/reference/camp_target.webp: layout and scale match; missing are painted trees, bushes, tufts, campfire, chest, raft, sand texture.
+
+## 2026-11-16 — Painted bay backdrop
+- Top-down bay painted with the reference as a style image (the variants with the reference matched the style; the ones without came out flat and vector-like). Chosen: bay_topdown (59); rejected: 58 (paper frame at the edges), 60 (flatter grass edge), 52–56 (small details painted at map scale).
+- Lesson: a backdrop carries only large shapes; shells, pebbles, tufts and flowers are separate sprites at true size (a shell painted into a map would be over 1 m long).
+- The terrain of the bay is read from the painting (tools/bay_shape.py → src/game/bay_shape.ts): where it is water, the game has water.
+- Picture covers 18 × 18 m (≈ one screen pixel per picture pixel at the default zoom). Painted foam pulses towards the shore, water shimmers, storm darkens it.
+- Shells: sheet "shells" (61), split into shell_1..6, scattered on every beach. Rejected: 57 (watermark).
+- Open: the seam where the painting fades into the generated shore; to be solved with painted materials for the whole island.

@@ -423,11 +423,14 @@ export interface Art {
   sprites: Record<string, LoadedSprite>;
   /** Painted ground textures (e.g. "ground_grass"), when available. */
   textures: Record<string, HTMLImageElement>;
+  /** Painted top-down backgrounds (e.g. "bay"), with their side in metres. */
+  backdrops: Record<string, { img: HTMLImageElement; size: number }>;
 }
 
 interface Manifest {
   sprites: Record<string, { file: string; w: number; h: number; size: number; footX?: number; handX?: number; handY?: number }>;
   textures: Record<string, { file: string }>;
+  backdrops?: Record<string, { file: string; size: number }>;
 }
 
 /**
@@ -449,6 +452,7 @@ export async function loadArt(): Promise<Art> {
     }),
   );
   const textures: Record<string, HTMLImageElement> = {};
+  const backdrops: Art['backdrops'] = {};
   const base = import.meta.env.BASE_URL;
   try {
     const res = await fetch(`${base}art/manifest.json`);
@@ -469,10 +473,13 @@ export async function loadArt(): Promise<Art> {
         ...Object.entries(m.textures).map(async ([key, e]) => {
           textures[key] = await loadImage(base + e.file);
         }),
+        ...Object.entries(m.backdrops ?? {}).map(async ([key, e]) => {
+          backdrops[key] = { img: await loadImage(base + e.file), size: e.size };
+        }),
       ]);
     }
   } catch (e) {
     console.warn('Painted art not loaded, using placeholders', e);
   }
-  return { sprites, textures };
+  return { sprites, textures, backdrops };
 }

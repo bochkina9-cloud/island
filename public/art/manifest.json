@@ -116,11 +116,59 @@
    "h": 364,
    "size": 0.55,
    "footX": 0.287
+  },
+  "shell_1": {
+   "file": "art/shell_1.png",
+   "w": 153,
+   "h": 160,
+   "size": 0.2,
+   "footX": 0.641
+  },
+  "shell_2": {
+   "file": "art/shell_2.png",
+   "w": 177,
+   "h": 160,
+   "size": 0.2,
+   "footX": 0.599
+  },
+  "shell_3": {
+   "file": "art/shell_3.png",
+   "w": 144,
+   "h": 160,
+   "size": 0.2,
+   "footX": 0.597
+  },
+  "shell_4": {
+   "file": "art/shell_4.png",
+   "w": 180,
+   "h": 160,
+   "size": 0.2,
+   "footX": 0.514
+  },
+  "shell_5": {
+   "file": "art/shell_5.png",
+   "w": 195,
+   "h": 160,
+   "size": 0.2,
+   "footX": 0.538
+  },
+  "shell_6": {
+   "file": "art/shell_6.png",
+   "w": 168,
+   "h": 160,
+   "size": 0.2,
+   "footX": 0.432
   }
  },
  "textures": {
   "ground_grass": {
    "file": "art/ground_grass.jpg"
+  }
+ },
+ "backdrops": {
+  "bay": {
+   "file": "art/bay.jpg",
+   "size": 18.0
   }
  }
 }

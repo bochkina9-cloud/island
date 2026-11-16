@@ -1,5 +1,6 @@
 import { Noise2D } from '../core/noise';
 import { hashString, makeRng } from '../core/rng';
+import { BAY_SHAPE } from './bay_shape';
 import { RAFT_CARGO, type ResourceKind } from './data';
 import { CHEST_SIZE, type Entity, type GameState, INVENTORY_SIZE, SAVE_VERSION, type WorldSettings, encodeBytes } from './state';
 
@@ -43,6 +44,8 @@ export class Terrain {
   readonly res = 4; // samples per unit in the cache
   /** The hand-laid starting bay: where the hero stands, with the beach to the west. */
   readonly bay: { x: number; z: number };
+  /** Where the painted bay picture lies on the ground: top-left corner (x, z) and side in metres. */
+  bayPicture!: { x: number; z: number; size: number };
 
   constructor(seedText: string) {
     this.seed = hashString(seedText);
@@ -79,29 +82,36 @@ export class Terrain {
       }
     }
     const bx = Math.max(home.x - home.r * 0.9, coast) + 6;
+    // The painted bay (art/incoming/bay_topdown) decides the shape: the hero starts 1 m
+    // into the grass, level with the middle of the picture.
+    const S = BAY_SHAPE.size;
+    const rowAt = (list: number[], v: number) => {
+      const f = Math.max(0, Math.min(list.length - 1, (v / S + 0.5) * (list.length - 1)));
+      const i = Math.min(list.length - 2, Math.floor(f));
+      return list[i] + (list[i + 1] - list[i]) * (f - i);
+    };
+    const u0 = -1.0 - rowAt(BAY_SHAPE.grass, 0) * S;
+    this.bayPicture = { x: bx + u0, z: bz - S / 2, size: S };
     const n = MAP_SIZE * this.res;
-    const phase = rng() * 6.28;
-    for (let j = Math.floor((bz - 24) * this.res); j <= Math.ceil((bz + 24) * this.res); j++) {
-      for (let i = Math.floor((bx - 26) * this.res); i <= Math.ceil((bx + 22) * this.res); i++) {
+    const half = S / 2;
+    for (let j = Math.floor((bz - half - 10) * this.res); j <= Math.ceil((bz + half + 10) * this.res); j++) {
+      for (let i = Math.floor((bx + u0 - 8) * this.res); i <= Math.ceil((bx + u0 + S + 8) * this.res); i++) {
         if (i < 0 || j < 0 || i >= n || j >= n) continue;
         const u = i / this.res - bx;
         const v = j / this.res - bz;
-        // How much of the designed shape applies: all of it in the middle, fading out at the edges.
-        const wv = 1 - smoothstep(12, 22, Math.abs(v));
-        const wu = 1 - smoothstep(10, 20, u);
+        // All of the painted shape in the picture, fading into the random island around it.
+        const wv = 1 - smoothstep(half - 3, half + 9, Math.abs(v));
+        const wu = 1 - smoothstep(u0 + S - 4, u0 + S + 8, u);
         const w = wv * wu;
         if (w <= 0) continue;
-        // Waterline wanders a little; further out at the top where the shore rocks are.
-        // As in the picture: the water comes within ~3.5 m of the hero, the coast turns away
-        // to the upper left, and the beach widens towards the bottom of the screen.
-        const sx = -3.6 + Math.sin(v * 0.22 + phase) * 0.6 + Math.sin(v * 0.57 + phase * 2) * 0.3 - Math.max(0, -v - 4) * 0.35 - Math.max(0, v - 3) * 0.3;
-        const sand = 2.2 + Math.max(0, v - 2) * 0.22;
+        const sx = u0 + rowAt(BAY_SHAPE.water, v) * S; // waterline
+        const sand = Math.max(1, (rowAt(BAY_SHAPE.grass, v) - rowAt(BAY_SHAPE.water, v)) * S);
         const d = u - sx; // metres inland from the waterline
         let target: number;
         if (d < 0) target = Math.max(-0.6, d * 0.05 - 0.01);
         else if (d < sand) target = (d / sand) * 0.072;
         else target = 0.075 + (d - sand) * 0.008;
-        target += this.elevation.noise(u * 0.3 + 40, v * 0.3) * 0.008;
+        target += this.elevation.noise(u * 0.3 + 40, v * 0.3) * 0.004;
         const k = j * n + i;
         // Out at sea the shape only ever deepens the water, so no land appears from nowhere.
         const raw = this.heightCache[k];
