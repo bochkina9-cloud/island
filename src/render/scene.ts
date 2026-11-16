@@ -8,8 +8,11 @@ import { paintGround } from './ground';
 
 const PITCH = (46 * Math.PI) / 180;
 const MAX_LIGHTS = 8;
-/** Sun from the right and a little behind the camera: shadows fall to the left and slightly down. */
-const SUN_ANGLE = Math.PI - 1.22;
+/**
+ * Sun from the right and in front of the scene: shadows fall to the left and a little away from
+ * the camera, so they tuck in behind the feet as in the reference (towards the camera they look detached).
+ */
+const SUN_DIR = { x: -0.92, z: -0.38 };
 const POSES = ['pose_swing_up', 'pose_swing_down', 'pose_thrust', 'pose_hold_forward', 'pose_pickup', 'pose_paddle'];
 /** Where the tool hand is on the walking frames (fraction of the sprite, y from the feet). */
 const WALK_HAND: Record<'front' | 'side' | 'back', [number, number]> = { front: [0.12, 0.46], side: [0.6, 0.45], back: [0.9, 0.47] };
@@ -134,7 +137,7 @@ const SHADOW_FRAG = /* glsl */ `
   void main() {
     vec4 c = texture2D(map, vUv);
     float day = clamp(uAmbient.r, 0.0, 1.0);
-    gl_FragColor = vec4(0.08, 0.06, 0.02, c.a * 0.3 * day);
+    gl_FragColor = vec4(0.07, 0.05, 0.02, c.a * 0.55 * day);
   }
 `;
 
@@ -251,6 +254,10 @@ interface SpriteView {
   mesh: THREE.Mesh;
   mat: THREE.ShaderMaterial;
   shadow: THREE.Mesh;
+  /** How far behind the base line the contact shadow sits. */
+  shadowDepth: number;
+  /** Width of the object on the ground, metres. */
+  width: number;
   /** Silhouette cast on the ground. */
   cast: THREE.Mesh;
   castMat: THREE.ShaderMaterial;
@@ -378,7 +385,7 @@ export class WorldView {
     const castMat = this.castMaterial('hero_front');
     const cast = new THREE.Mesh(this.geometry('hero_front'), castMat);
     cast.renderOrder = 1;
-    const shadow = this.makeShadow(0.7);
+    const shadow = this.makeShadow(0.6);
     this.scene.add(group, shadow, cast);
     this.hero = { group, mesh, mat, shadow, cast, castMat, tool, toolMat, view: 'front', phase: 0, lastX: this.game.player.x, lastZ: this.game.player.z };
   }
@@ -446,14 +453,27 @@ export class WorldView {
       fragmentShader: SILHOUETTE_FRAG,
       transparent: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
   }
 
-  /** Lays a silhouette on the ground, pointing away from the sun. */
-  private placeCast(m: THREE.Mesh, x: number, z: number, mirror: number) {
-    m.position.set(x, 0.012, z);
-    m.rotation.set(-Math.PI / 2, SUN_ANGLE, 0, 'YXZ');
-    m.scale.set(mirror, this.castLength, 1);
+  /**
+   * Lays a silhouette on the ground: its height thrown away from the sun (left and back), its width
+   * across the sun's direction, as for a round object. It starts from the middle of the object's
+   * footprint, which for a picture drawn from above lies behind the bottom edge of the sprite;
+   * starting at the bottom edge would put half the shadow in front and make things seem to hover.
+   */
+  private placeCast(m: THREE.Mesh, x: number, z: number, mirror: number, width: number) {
+    const len = this.castLength;
+    const back = width * 0.45;
+    m.matrixAutoUpdate = false;
+    m.matrix.set(
+      -SUN_DIR.z * mirror, SUN_DIR.x * len, 0, x,
+      0, 0, 1, 0.012,
+      SUN_DIR.x * mirror, SUN_DIR.z * len, 0, z - back,
+      0, 0, 0, 1,
+    );
+    m.matrixWorldNeedsUpdate = true;
   }
 
   private makeShadow(width: number): THREE.Mesh {
@@ -531,9 +551,12 @@ export class WorldView {
     this.scene.add(m);
   }
 
-  /** Shells along the beaches: pure decoration, the same for a given seed. */
+  /** Shells and pebbles on the beaches, a few pebbles in the grass: pure decoration, the same for a given seed. */
   private buildDecor() {
-    const keys = [1, 2, 3, 4, 5, 6].map((i) => `shell_${i}`).filter((k) => this.sprites[k]?.painted);
+    const painted = (prefix: string) => Array.from({ length: 12 }, (_, i) => `${prefix}_${i + 1}`).filter((k) => this.sprites[k]?.painted);
+    const shells = painted('shell');
+    const pebbles = painted('pebble');
+    const keys = [...shells, ...pebbles];
     if (!keys.length) return;
     const t = this.game.terrain;
     const mats = new Map(keys.map((k) => [k, this.spriteMaterial(k)]));
@@ -548,8 +571,15 @@ export class WorldView {
         const px = x + rnd();
         const pz = z + rnd();
         const h = t.height(px, pz);
-        if (h < 0.008 || h > 0.05 || r > 0.07) continue;
-        const key = keys[Math.floor(rnd() * keys.length)];
+        const beach = h >= 0.008 && h <= 0.05;
+        const meadow = h > 0.05 && t.biome(px, pz) === 'grass';
+        let list: string[];
+        if (beach && r < 0.05 && shells.length) list = shells;
+        else if (beach && r < 0.12 && pebbles.length) list = pebbles;
+        else if (meadow && r < 0.012 && pebbles.length) list = pebbles;
+        else continue;
+        if (t.inPond(px, pz)) continue;
+        const key = list[Math.floor(rnd() * list.length)];
         const m = new THREE.Mesh(this.geometry(key, 0.8 + rnd() * 0.5), mats.get(key)!);
         m.rotation.x = -PITCH;
         m.position.set(px, 0.01, pz);
@@ -629,12 +659,13 @@ export class WorldView {
         const mesh = new THREE.Mesh(this.geometry(key, e.kind === 'drop' ? 0.7 : 1), mat);
         mesh.rotation.x = -PITCH;
         const { w } = this.size(key);
-        const shadow = this.makeShadow(Math.min(3.2, w * (e.kind === 'palm' ? 0.35 : 0.7)));
+        const sw = Math.min(3.2, w * (e.kind === 'palm' ? 0.35 : 0.75));
+        const shadow = this.makeShadow(sw);
         const castMat = this.castMaterial(key);
         const cast = new THREE.Mesh(this.geometry(key, e.kind === 'drop' ? 0.7 : 1), castMat);
         cast.renderOrder = 1;
         cast.visible = e.kind !== 'drop' && e.kind !== 'raft';
-        v = { entity: e, mesh, mat, shadow, cast, castMat, key };
+        v = { entity: e, mesh, mat, shadow, cast, castMat, key, shadowDepth: sw * 0.25 - 0.05, width: e.kind === 'palm' || e.kind === 'tree' ? 0.5 : w };
         if (e.kind === 'campfire') {
           const fm = this.spriteMaterial('flame');
           fm.uniforms.uUnlit.value = 1;
@@ -772,8 +803,9 @@ export class WorldView {
       const wobble = (e.work ?? 0) > 0 ? Math.sin(this.clock * 40) * 0.03 : 0;
       v.mesh.position.set(e.x + wobble, y, e.z);
       v.mesh.scale.set(sx, sy, 1);
-      v.shadow.position.set(e.x, 0.02, e.z + 0.05);
-      if (v.cast.visible) this.placeCast(v.cast, e.x, e.z, sx);
+      // Contact shadow under the footprint: painted objects stand on ground that reaches behind their base line.
+      v.shadow.position.set(e.x, 0.02, e.z - v.shadowDepth);
+      if (v.cast.visible) this.placeCast(v.cast, e.x, e.z, sx, v.width);
       const onFire = (e.burn ?? 0) > 0;
       if (onFire && !v.fire) {
         const fm = this.spriteMaterial('flame');
@@ -815,7 +847,7 @@ export class WorldView {
   /** Shadow length over the day: short around noon, long towards evening. */
   private get castLength(): number {
     const t = this.game.state.time;
-    return 0.55 + 0.9 * smooth(t / NIGHT_START) ** 2;
+    return 0.45 + 0.65 * smooth(t / NIGHT_START) ** 2;
   }
 
   /** The hero: view by direction, walking legs, action poses and the tool in hand. */
@@ -882,10 +914,10 @@ export class WorldView {
     h.mesh.scale.set(mirror, 1, 1);
     // A slight sway of the shoulders while walking towards or away from the camera.
     h.mesh.rotation.z = walking && h.view !== 'side' ? stride * 0.025 : 0;
-    h.shadow.position.set(p.x, 0.02, p.z + 0.05);
+    h.shadow.position.set(p.x, 0.02, p.z - 0.12);
     h.shadow.visible = !sailing;
     h.cast.visible = !sailing;
-    this.placeCast(h.cast, p.x, p.z, mirror);
+    this.placeCast(h.cast, p.x, p.z, mirror, 0.45);
 
     // Tool in the fist.
     const hand = p.hand;

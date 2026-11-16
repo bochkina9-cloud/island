@@ -38,3 +38,10 @@
 - Picture covers 18 × 18 m (≈ one screen pixel per picture pixel at the default zoom). Painted foam pulses towards the shore, water shimmers, storm darkens it.
 - Shells: sheet "shells" (61), split into shell_1..6, scattered on every beach. Rejected: 57 (watermark).
 - Open: the seam where the painting fades into the generated shore; to be solved with painted materials for the whole island.
+
+## 2026-11-16 — "Everything floats" (user feedback)
+- Cause 1: shadows fell towards the camera, so the ground showed between an object and its shadow. Now they fall left and away from the camera, as in the reference.
+- Cause 2: the silhouette started at the sprite's bottom edge, but a picture drawn from above stands on a footprint that lies behind that edge. The shadow now starts from the middle of the footprint; the contact shadow moved behind the base line too, leaving a dark rim at the ground.
+- Cause 3: scale. Boulders 1.5 → ~1.0 m, cliff 3.2 → 2.6 m, tent 2.3 → 2.0 m, stones 0.55 → 0.45 m; the hero stays 1.75 m (reference proportions).
+- Pebbles: sheet 64 chosen (12 pebbles, varied sizes); 62, 63 kept as candidates. Pebbles keep their relative sizes; scattered on beaches and sparsely in grass.
+- Still to come for grounding: grass tufts around the bases of rocks and trees (as in the reference), once the tuft art arrives.

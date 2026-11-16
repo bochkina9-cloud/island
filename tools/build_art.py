@@ -41,20 +41,22 @@ ASSETS = {
     'pose_hold_forward': ('pose_hold_forward', 1.75, HERO),
     'pose_pickup': ('pose_pickup', 1.15, HERO),
     'pose_paddle': ('pose_paddle', 1.15, HERO),
-    'tent': ('tent', 2.3, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}),
-    'boulder_1': ('boulder_1', 1.5, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
-    'boulder_2': ('boulder_2', 1.3, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
-    'boulder_3': ('boulder_3', 1.4, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
+    'tent': ('tent', 2.0, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}),
+    'boulder_1': ('boulder_1', 1.05, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
+    'boulder_2': ('boulder_2', 0.9, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
+    'boulder_3': ('boulder_3', 0.95, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
     # Earlier, sunnier generations: pulled down to the reference's grey-brown.
-    'cliff_1': ('cliff_1', 3.2, {'gain': 0.74, 'sat': 0.8, 'warm': 0.0}),
-    'stones_1': ('stones_1', 0.55, {'gain': 0.68, 'sat': 0.7, 'warm': -0.05}),
+    'cliff_1': ('cliff_1', 2.6, {'gain': 0.74, 'sat': 0.8, 'warm': 0.0}),
+    'stones_1': ('stones_1', 0.45, {'gain': 0.68, 'sat': 0.7, 'warm': -0.05}),
 }
 TEXTURES = {
     'ground_grass': 'ground_grass',
 }
-# Sheets with several small objects: split into <key>_1, <key>_2, ... (height in metres each).
+# Sheets with several small objects: split into <key>_1, <key>_2, ... Height in metres of the
+# tallest piece; the others keep their size relative to it.
 SHEETS = {
     'shell': ('shells', 0.2, {'gain': 1.0, 'sat': 0.9, 'warm': 0.0}),
+    'pebble': ('pebbles', 0.16, {'gain': 1.0, 'sat': 0.85, 'warm': 0.0}),
 }
 # Painted top-down backgrounds: key -> (source, size of the square in metres).
 BACKDROPS = {
@@ -178,12 +180,14 @@ def main() -> None:
     for key, (src, height, g) in SHEETS.items():
         cut(find(src), tmp)
         parts = split_sheet(grade(Image.open(tmp), g['gain'], g['sat'], g['warm']))
+        tallest = max(p.size[1] for p in parts)
         for i, part in enumerate(parts, 1):
+            size = round(height * part.size[1] / tallest, 3)
             if part.size[1] > 160:
                 part = part.resize((part.size[0] * 160 // part.size[1], 160), Image.LANCZOS)
             name = f'{key}_{i}'
             part.save(os.path.join(OUT, name + '.png'))
-            entry = {'file': f'art/{name}.png', 'w': part.size[0], 'h': part.size[1], 'size': height}
+            entry = {'file': f'art/{name}.png', 'w': part.size[0], 'h': part.size[1], 'size': size}
             entry.update(anchors(part, name))
             manifest['sprites'][name] = entry
         print(key, len(parts), 'pieces')
