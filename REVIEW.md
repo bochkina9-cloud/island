@@ -55,3 +55,7 @@
 ## 2026-11-16 — Big rocks; campfire
 - The cliff still looked pasted on: its "round" shadow, pushed back under the footprint, showed beside the rock's upper half on screen while the ground at its base stayed lit. Two shadow modes now: slim upright things (hero, trees, palms, saplings, tufts) keep the round shadow; broad solid things (rocks, cliff, tent, chest, bushes, campfire) get a shadow that spreads from the base line to the left.
 - Campfire: 74 chosen (ink outlines, rope lashings, closest to the reference style); 71–73 kept as candidates (72/73 too rendered, 71 good but busier). The flame sits over the painted logs and is small, as in the reference; the pot stays visible.
+
+## 2026-11-17 — "The back of the rock is lifted"
+- A painted rock's bottom outline is not a straight line: towards the back it climbs. Ground shadows were tied to the sprite's bottom line, so lit grass showed under the climbing part, and the rock looked tilted and lifted.
+- Added a contact rim: the sprite's own alpha, drawn in its plane 3 cm behind it and shifted down 10 cm, blurred and dark, only from the lower 40% of the sprite. It peeks out exactly along the painted outline. Applied to broad painted objects (rocks, cliff, tent, chest, campfire).

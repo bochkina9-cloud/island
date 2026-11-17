@@ -159,6 +159,31 @@ const SHADOW_FRAG = /* glsl */ `
  * Silhouette shadow: the sprite itself laid on the ground away from the sun.
  * Softer and lighter the further it is from the object's foot.
  */
+/**
+ * Contact edge: drawn in the sprite's own plane, just behind it, shifted down by uDrop, so a soft
+ * dark rim peeks out along the painted bottom outline, including where that outline climbs
+ * towards the back of a rock. Only the lower part of the sprite casts it (no rims under
+ * overhangs in mid-air).
+ */
+const CONTACT_FRAG = /* glsl */ `
+  ${LIGHT_GLSL}
+  uniform sampler2D map;
+  uniform float uDrop;
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  void main() {
+    vec2 uv = vUv + vec2(0.0, uDrop);
+    float r = uDrop * 0.6;
+    float a = texture2D(map, uv).a * 0.4
+      + (texture2D(map, uv + vec2(r, 0.0)).a + texture2D(map, uv - vec2(r, 0.0)).a
+       + texture2D(map, uv + vec2(0.0, r)).a + texture2D(map, uv - vec2(0.0, r)).a) * 0.15;
+    float day = smoothstep(0.35, 0.85, uAmbient.r);
+    a *= 0.85 * (0.45 + 0.55 * day) * (1.0 - smoothstep(0.12, 0.4, vUv.y));
+    if (a < 0.004) discard;
+    gl_FragColor = vec4(0.06, 0.05, 0.02, a);
+  }
+`;
+
 const SILHOUETTE_FRAG = /* glsl */ `
   ${LIGHT_GLSL}
   uniform sampler2D map;
@@ -276,6 +301,8 @@ interface SpriteView {
   cast: THREE.Mesh;
   /** Dark footprint right under the object (same silhouette, squashed straight back). */
   ao: THREE.Mesh;
+  /** Dark rim along the painted bottom outline (broad painted objects only). */
+  contact?: THREE.Mesh;
   castMat: THREE.ShaderMaterial;
   key: string;
   flame?: THREE.Mesh;
@@ -743,7 +770,21 @@ export class WorldView {
         const ao = new THREE.Mesh(cast.geometry, castMat);
         ao.renderOrder = 1;
         shadow.visible = false;
-        v = { entity: e, mesh, mat, shadow, cast, castMat, ao, key, shadowDepth: sw * 0.25 - 0.05, width: e.kind === 'palm' || e.kind === 'tree' ? 0.5 : w };
+        let contact: THREE.Mesh | undefined;
+        if (this.sprites[key].painted && !ROUND.has(e.kind) && e.kind !== 'drop' && e.kind !== 'raft') {
+          const cm = new THREE.ShaderMaterial({
+            uniforms: { ...shared, map: { value: this.texture(key) }, uDrop: { value: 0.1 / this.size(key).h }, uSway: { value: 0 } },
+            vertexShader: SPRITE_VERT,
+            fragmentShader: CONTACT_FRAG,
+            transparent: true,
+            depthWrite: false,
+          });
+          contact = new THREE.Mesh(mesh.geometry, cm);
+          contact.rotation.x = -PITCH;
+          contact.renderOrder = 1;
+          this.scene.add(contact);
+        }
+        v = { entity: e, mesh, mat, shadow, cast, castMat, ao, contact, key, shadowDepth: sw * 0.25 - 0.05, width: e.kind === 'palm' || e.kind === 'tree' ? 0.5 : w };
         if (e.kind === 'campfire') {
           const fm = this.spriteMaterial('flame');
           fm.uniforms.uUnlit.value = 1;
@@ -761,6 +802,10 @@ export class WorldView {
 
   private removeView(v: SpriteView) {
     this.scene.remove(v.mesh, v.shadow, v.cast, v.ao);
+    if (v.contact) {
+      this.scene.remove(v.contact);
+      (v.contact.material as THREE.ShaderMaterial).dispose();
+    }
     if (v.flame) this.scene.remove(v.flame);
     if (v.fire) this.scene.remove(v.fire);
     v.mat.dispose();
@@ -854,6 +899,7 @@ export class WorldView {
       v.shadow.visible = !far;
       v.cast.visible = !far && e.kind !== 'drop' && e.kind !== 'raft';
       v.ao.visible = v.cast.visible;
+      if (v.contact) v.contact.visible = !far;
       v.shadow.visible = false;
       if (v.flame) v.flame.visible = !far;
       if (far && e.kind !== 'boar') continue;
@@ -892,6 +938,11 @@ export class WorldView {
       if (v.cast.visible) {
         this.placeCast(v.cast, e.x, e.z, sx, v.width, ROUND.has(e.kind));
         this.placeAo(v.ao, e.x, e.z, sx, this.size(v.key).h);
+      }
+      if (v.contact) {
+        // Same place as the sprite, 3 cm behind its plane so the sprite covers all but the rim.
+        v.contact.position.set(e.x + wobble, y - 0.03 * Math.sin(PITCH), e.z - 0.03 * Math.cos(PITCH));
+        v.contact.scale.set(sx, sy, 1);
       }
       const onFire = (e.burn ?? 0) > 0;
       if (onFire && !v.fire) {
