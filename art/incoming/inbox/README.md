@@ -21,3 +21,4 @@ duplicates removed. Moved to art/incoming/ (or candidates/) when chosen.
 | palm_tall_1..3 | Coconut palm, curved trunk, coconuts | |
 | palm_young_1 | Young palm, straight trunk | |
 | palm_young_noref_1, 2 | Young palm, made without the style reference | softer, little ink: compare |
+| chop_side_99..103 | Chopping with an axe, 4 frames, side view | 101 and 102 best: axe held in both fists, clear arc; 99 shoulder-carry start also good |
