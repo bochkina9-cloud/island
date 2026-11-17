@@ -305,6 +305,60 @@
    "h": 160,
    "size": 0.11,
    "footX": 0.506
+  },
+  "run_1": {
+   "file": "art/run_1.png",
+   "w": 348,
+   "h": 640,
+   "size": 1.78,
+   "footX": 0.5,
+   "handX": 0.865,
+   "handY": 0.616
+  },
+  "run_2": {
+   "file": "art/run_2.png",
+   "w": 348,
+   "h": 640,
+   "size": 1.78,
+   "footX": 0.5,
+   "handX": 0.816,
+   "handY": 0.452
+  },
+  "run_3": {
+   "file": "art/run_3.png",
+   "w": 348,
+   "h": 640,
+   "size": 1.78,
+   "footX": 0.5,
+   "handX": 0.782,
+   "handY": 0.561
+  },
+  "run_4": {
+   "file": "art/run_4.png",
+   "w": 348,
+   "h": 640,
+   "size": 1.78,
+   "footX": 0.5,
+   "handX": 0.862,
+   "handY": 0.748
+  },
+  "run_5": {
+   "file": "art/run_5.png",
+   "w": 348,
+   "h": 640,
+   "size": 1.78,
+   "footX": 0.5,
+   "handX": 0.845,
+   "handY": 0.625
+  },
+  "run_6": {
+   "file": "art/run_6.png",
+   "w": 348,
+   "h": 640,
+   "size": 1.78,
+   "footX": 0.5,
+   "handX": 0.853,
+   "handY": 0.633
   }
  },
  "textures": {

@@ -14,7 +14,7 @@ from PIL import Image
 NEAR, FAR = 22.0, 60.0  # colour distance: below NEAR = background, above FAR = object
 
 
-def cut(src: str, dst: str, pad: int = 6, strict: bool = False) -> None:
+def cut(src: str, dst: str, pad: int = 6, strict: bool = False, near: float = NEAR, far: float = FAR) -> None:
     """strict: also drop purple pixels inside the object (only for art with no purple of its own, e.g. grass)."""
     im = Image.open(src).convert('RGB')
     a = np.asarray(im).astype(np.float32)
@@ -22,7 +22,7 @@ def cut(src: str, dst: str, pad: int = 6, strict: bool = False) -> None:
     border = np.concatenate([a[:b].reshape(-1, 3), a[-b:].reshape(-1, 3), a[:, :b].reshape(-1, 3), a[:, -b:].reshape(-1, 3)])
     bg = np.median(border, axis=0)
     dist = np.sqrt(((a - bg) ** 2).sum(axis=2))
-    alpha = np.clip((dist - NEAR) / (FAR - NEAR), 0, 1)
+    alpha = np.clip((dist - near) / (far - near), 0, 1)
     # Despill: un-mix the background from semi-transparent edge pixels.
     k = np.maximum(alpha, 1e-3)[..., None]
     rgb = np.clip((a - (1 - k) * bg) / k, 0, 255)

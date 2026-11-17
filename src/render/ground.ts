@@ -91,7 +91,7 @@ export function paintGround(terrain: Terrain): HTMLCanvasElement {
       r *= 1 - 0.18 * wet; gr *= 1 - 0.2 * wet; bl *= 1 - 0.22 * wet;
       d[o + 3] = 255;
       if (terrain.inPond(x, z)) {
-        r = 96; gr = 176; bl = 196;
+        r = 102; gr = 87; bl = 54; // wet earth; the water itself is drawn by the pond shader
         d[o + 3] = 255;
       }
       d[o] = clamp(r);
@@ -101,19 +101,6 @@ export function paintGround(terrain: Terrain): HTMLCanvasElement {
   }
 
   ctx.putImageData(img, 0, 0);
-
-  // Pond outlines.
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(61,43,31,0.6)';
-  for (const p of terrain.ponds) {
-    ctx.beginPath();
-    ctx.ellipse(p.x * PX, p.z * PX, p.r * PX, p.r * PX, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.beginPath();
-    ctx.ellipse((p.x - p.r * 0.3) * PX, (p.z - p.r * 0.3) * PX, p.r * PX * 0.3, p.r * PX * 0.12, -0.4, 0, Math.PI * 2);
-    ctx.fill();
-  }
 
   // Grass strokes and pebbles.
   const rng = makeRng(terrain.seed ^ 0x777);

@@ -210,6 +210,12 @@ function play(choice: MenuResult): Promise<void> {
         if (e) game.actOn(e.id);
         else {
           const p = view.groundAt(ev.clientX, ev.clientY);
+          // A click on a pond means "go and drink" (ponds have no sprite to click on).
+          const pond = p && game.state.entities.find((q) => q.kind === 'pond' && Math.hypot(q.x - p.x, q.z - p.z) < game.radiusOf(q) + 0.3);
+          if (pond) {
+            game.actOn(pond.id);
+            return;
+          }
           // With a rod in hand, a click on water means "go and fish there".
           if (p && game.player.hand?.item === 'fishing_rod' && game.terrain.sailable(p.x, p.z) && game.player.onRaft === undefined) game.fishAt(p.x, p.z);
           else if (p) game.moveTo(p.x, p.z);

@@ -44,6 +44,9 @@ const shared = {
   uTime: { value: 0 },
   uStorm: { value: 0 },
   uDry: { value: 0 },
+  /** Ponds (x, z, radius): shadows fade on their water. */
+  uPonds: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
+  uPondCount: { value: 0 },
 };
 
 const LIGHT_GLSL = /* glsl */ `
@@ -220,6 +223,8 @@ const CONTACT_FRAG = /* glsl */ `
 const SILHOUETTE_FRAG = /* glsl */ `
   ${LIGHT_GLSL}
   uniform sampler2D map;
+  uniform vec3 uPonds[8];
+  uniform int uPondCount;
   varying vec2 vUv;
   varying vec3 vWorld;
   void main() {
@@ -229,6 +234,12 @@ const SILHOUETTE_FRAG = /* glsl */ `
       + texture2D(map, vUv + vec2(0.0, r)).a * 0.16 + texture2D(map, vUv - vec2(0.0, r)).a * 0.16;
     float day = smoothstep(0.35, 0.85, uAmbient.r);
     a *= 0.42 * day * (1.0 - 0.45 * vUv.y) * (1.0 - uStorm * 0.7);
+    // Water does not take a shadow like grass: much fainter on a pond.
+    for (int i = 0; i < 8; i++) {
+      if (i >= uPondCount) break;
+      float dd = distance(vWorld.xz, uPonds[i].xy) / uPonds[i].z;
+      a *= mix(0.25, 1.0, smoothstep(0.9, 1.08, dd));
+    }
     if (a < 0.004) discard;
     gl_FragColor = vec4(0.10, 0.08, 0.03, a);
   }
@@ -287,6 +298,38 @@ const BACKDROP_FRAG = /* glsl */ `
     col += vec3(0.1) * foam * sin(uTime * 1.6 - vWorld.x * 1.4 + sin(vWorld.z * 0.5));
     col = mix(col, vec3(0.16, 0.30, 0.38), uStorm * 0.5 * water);
     gl_FragColor = vec4(applyLight(col, vWorld), edge);
+  }
+`;
+
+/**
+ * A pond: a wobbly round of fresh water, shallow and light at the edge, darker in the middle,
+ * with ripples and glints, a bright line where it meets the bank and a rim of wet earth.
+ */
+const POND_FRAG = /* glsl */ `
+  ${LIGHT_GLSL}
+  uniform float uSeed;
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  void main() {
+    vec2 q = vUv * 2.0 - 1.0;
+    float ang = atan(q.y, q.x);
+    float wob = 1.0 + 0.06 * sin(ang * 3.0 + uSeed) + 0.04 * sin(ang * 5.0 + uSeed * 2.0);
+    float d = length(q) * 1.3 / wob; // 1.0 = the water's edge
+    if (d > 1.22) discard;
+    vec3 shallow = vec3(0.40, 0.64, 0.58);
+    vec3 deep = vec3(0.15, 0.35, 0.41);
+    vec3 water = mix(shallow, deep, smoothstep(0.05, 0.85, 1.0 - d));
+    float w = sin(vWorld.x * 1.7 + uTime * 0.9) + sin(vWorld.z * 1.3 - uTime * 1.2);
+    water += 0.022 * w;
+    float sp = sin(vWorld.x * 4.1 + uTime * 1.5) * sin(vWorld.z * 3.3 - uTime * 1.1);
+    water += vec3(0.05) * smoothstep(0.96, 1.0, sp) * (1.0 - smoothstep(0.7, 0.95, d));
+    float edgeLine = smoothstep(0.88, 0.97, d) * (1.0 - smoothstep(0.97, 1.0, d));
+    water = mix(water, vec3(0.86, 0.9, 0.82), edgeLine * 0.4);
+    water = mix(water, vec3(0.16, 0.30, 0.38), uStorm * 0.4);
+    vec3 mud = vec3(0.40, 0.34, 0.21);
+    vec3 col = d < 1.0 ? water : mix(mud * 0.85, mud, (d - 1.0) / 0.22);
+    float a = d < 1.0 ? 1.0 : (1.0 - smoothstep(1.06, 1.22, d)) * 0.85;
+    gl_FragColor = vec4(applyLight(col, vWorld), a);
   }
 `;
 
@@ -429,6 +472,7 @@ export class WorldView {
     });
 
     this.buildBackdrop();
+    this.buildPonds();
     this.buildHero();
     this.buildDecor();
 
@@ -689,6 +733,27 @@ export class WorldView {
     m.position.set(at.x + at.size / 2, 0.006, at.z + at.size / 2);
     m.renderOrder = 0.5;
     this.scene.add(m);
+  }
+
+  private buildPonds() {
+    const ponds = this.game.terrain.ponds;
+    ponds.slice(0, 8).forEach((p, i) => shared.uPonds.value[i].set(p.x, p.z, p.r));
+    shared.uPondCount.value = Math.min(8, ponds.length);
+    ponds.forEach((p, i) => {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { ...shared, uSeed: { value: i * 2.3 + p.x } },
+        vertexShader: SPRITE_VERT,
+        fragmentShader: POND_FRAG,
+        transparent: true,
+        depthWrite: false,
+      });
+      const g = new THREE.PlaneGeometry(p.r * 2.6, p.r * 2.6);
+      g.rotateX(-Math.PI / 2);
+      const m = new THREE.Mesh(g, mat);
+      m.position.set(p.x, 0.007, p.z);
+      m.renderOrder = 0.6;
+      this.scene.add(m);
+    });
   }
 
   /**
@@ -1151,16 +1216,20 @@ export class WorldView {
         case 'eat': key = 'hero_front'; break;
       }
     } else if (g.bobber) key = 'pose_hold_forward';
-    const posed = key.startsWith('pose_') || act >= 0;
+    // Running sideways: the painted run cycle, six frames per two steps.
+    const runFrames = h.view === 'side' && g.moving && !sailing && act < 0 && this.sprites.run_1?.painted;
+    if (runFrames) key = `run_${(Math.floor((h.phase / (Math.PI * 2)) * 6) % 6) + 1}`;
+    const posed = key.startsWith('pose_') || key.startsWith('run_') || act >= 0;
     if (posed && key !== 'hero_front') h.view = 'side';
     const sprite = this.sprites[key];
-    const mirror = h.view === 'side' || key.startsWith('pose_') ? g.facing : 1;
+    const mirror = h.view === 'side' || key.startsWith('pose_') || key.startsWith('run_') ? g.facing : 1;
 
     h.mat.uniforms.map.value = h.castMat.uniforms.map.value = this.texture(key);
     h.mesh.geometry = h.cast.geometry = this.geometry(key);
     h.mat.uniforms.uFootX.value = sprite.footX ?? 0.5;
     h.mat.uniforms.uFlash.value = g.hurtPulse > 0 ? 0.5 : 0;
     const walking = g.moving && !sailing && !posed;
+    const running = !!runFrames;
     const s = Math.sin(h.phase);
     const stride = walking || h.phase % Math.PI > 0.05 ? s : 0;
     if (h.view === 'side' && !posed) {
@@ -1186,6 +1255,7 @@ export class WorldView {
     // Running: leaning into the step seen from the side, shoulders swinging seen from the front or back.
     h.mesh.rotation.z = 0;
     this.heroBody.rotation.z = walking ? (h.view === 'side' ? -mirror * 0.08 : stride * 0.045) : 0;
+    if (running) this.heroBody.rotation.z = 0; // the painted frames already lean and bounce
     h.shadow.position.set(p.x, 0.02, p.z - 0.12);
     h.shadow.visible = false;
     h.cast.visible = !sailing;
@@ -1217,6 +1287,7 @@ export class WorldView {
       let ang = TOOL_ANGLE[key] ?? TOOL_ANGLE.walk;
       if (hand.item === 'torch' && !key.startsWith('pose_')) ang = -0.5;
       if (key.startsWith('hero_') && walking) ang += stride * 0.25; // the arm swings with the stride
+      if (running) ang = -2.5; // hangs from the pumping fist
       h.tool.scale.set(mirror, 1, 1);
       h.tool.rotation.set(0, 0, ang * mirror);
     }

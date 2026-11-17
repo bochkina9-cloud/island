@@ -75,6 +75,10 @@ BACKDROPS = {
     'bay': ('bay_topdown', 18.0),
 }
 BAY_TS = os.path.join(ROOT, 'src', 'game', 'bay_shape.ts')
+# Animation strips: key -> (source, frames, height in metres of the strip's common box).
+STRIPS = {
+    'run': ('run_side', 6, 1.78, HERO),
+}
 MAX_SPRITE_HEIGHT = 640  # px; enough for close-ups, keeps memory in check
 
 
@@ -162,6 +166,71 @@ def green_base(im: Image.Image) -> Image.Image:
     return Image.fromarray(out, 'RGBA')
 
 
+def strip_frames(im: Image.Image, n: int) -> list[tuple[Image.Image, float]]:
+    """Frames of an animation sheet, each masked to its own figure (no bits of the neighbours),
+    all in one common box: same bottom line (feet stay on the ground, a jump stays a jump) and
+    the body's centre at the same place (head and chest, so the figure does not slide).
+    Returns (frame, footX) with footX the body centre as a fraction of the width."""
+    a = np.asarray(im)
+    alpha = a[..., 3] > 60
+    k = 2
+    small = np.asarray(Image.fromarray((alpha * 255).astype(np.uint8)).resize((im.size[0] // k, im.size[1] // k))) > 100
+    h, w = small.shape
+    label = np.zeros((h, w), np.int32)
+    comps = []
+    for y0 in range(h):
+        for x0 in range(w):
+            if not small[y0, x0] or label[y0, x0]:
+                continue
+            idx = len(comps) + 1
+            stack = [(y0, x0)]
+            label[y0, x0] = idx
+            pts = []
+            while stack:
+                y, x = stack.pop()
+                pts.append((y, x))
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    yy, xx = y + dy, x + dx
+                    if 0 <= yy < h and 0 <= xx < w and small[yy, xx] and not label[yy, xx]:
+                        label[yy, xx] = idx
+                        stack.append((yy, xx))
+            comps.append((len(pts), idx))
+    comps.sort(reverse=True)
+    keep = [i for _, i in comps[:n]]
+    # Small detached bits (a scarf end, a strand of hair) join the nearest figure.
+    cen = {i: np.argwhere(label == i).mean(axis=0) for i in keep}
+    for size, i in comps[n:]:
+        if size < 8:
+            continue
+        c = np.argwhere(label == i).mean(axis=0)
+        near = min(keep, key=lambda j: abs(cen[j][1] - c[1]))
+        label[label == i] = near
+    full = np.asarray(Image.fromarray(label.astype(np.int32).astype(np.uint16)).resize(im.size, Image.NEAREST))
+    frames = []
+    for i in keep:
+        mask = (full == i) & alpha
+        ys, xs = np.nonzero(mask)
+        head = ys < ys.min() + (ys.max() - ys.min()) * 0.45
+        cx = float(xs[head].mean())
+        frames.append((float(xs.min()), cx, ys.min(), ys.max(), mask))
+    frames.sort(key=lambda f: f[0])
+    top = min(f[2] for f in frames)
+    bottom = max(f[3] for f in frames)
+    half = int(max(max(f[1] - np.nonzero(f[4])[1].min(), np.nonzero(f[4])[1].max() - f[1]) for f in frames)) + 8
+    out = []
+    for _, cx, _, _, mask in frames:
+        x0 = int(cx) - half
+        canvas = np.zeros((bottom - top + 9, 2 * half, 4), np.uint8)
+        src = a.copy()
+        src[..., 3] = np.where(mask, src[..., 3], 0)
+        for xx in range(2 * half):
+            sx = x0 + xx
+            if 0 <= sx < a.shape[1]:
+                canvas[:bottom - top + 1, xx] = src[top:bottom + 1, sx]
+        out.append((Image.fromarray(canvas, 'RGBA'), 0.5))
+    return out
+
+
 def split_sheet(im: Image.Image) -> list[Image.Image]:
     """Separate objects on a cut-out sheet: connected areas of the alpha mask, left to right, top to bottom."""
     k = 4
@@ -226,6 +295,26 @@ def main() -> None:
             entry.update(anchors(part, name))
             manifest['sprites'][name] = entry
         print(key, len(parts), 'pieces')
+    for key, (src, n, height, g) in STRIPS.items():
+        cut(find(src), tmp, near=14, far=34)
+        frames = strip_frames(grade(Image.open(tmp), g['gain'], g['sat'], g['warm']), n)
+        for i, (fr, foot) in enumerate(frames, 1):
+            if fr.size[1] > MAX_SPRITE_HEIGHT:
+                fr = fr.resize((fr.size[0] * MAX_SPRITE_HEIGHT // fr.size[1], MAX_SPRITE_HEIGHT), Image.LANCZOS)
+            name = f'{key}_{i}'
+            fr.save(os.path.join(OUT, name + '.png'))
+            entry = {'file': f'art/{name}.png', 'w': fr.size[0], 'h': fr.size[1], 'size': height, 'footX': foot}
+            # The leading fist (furthest right at arm height) carries the tool.
+            al = np.asarray(fr)[..., 3] > 128
+            hh, ww = al.shape
+            ys, xs = np.nonzero(al)
+            fy = 1 - ys / hh
+            sel = np.nonzero((fy > 0.45) & (fy < 0.75))[0]
+            j = sel[xs[sel].argmax()]
+            entry['handX'] = round(float(xs[j]) / ww, 3)
+            entry['handY'] = round(float(fy[j]), 3)
+            manifest['sprites'][name] = entry
+        print(key, len(frames), 'frames')
     os.remove(tmp)
     manifest['backdrops'] = {}
     for key, (src, size) in BACKDROPS.items():

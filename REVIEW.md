@@ -73,3 +73,7 @@
 - Grass picking worked (tested: +2 grass), but decor tufts looked exactly like pickable ones. Pickable grass now uses the two fullest tufts at full size; decor uses the others, at half size.
 - Tools floated over the hand: the side-view hand anchor was wrong (0.60, 0.45 → measured 0.71, 0.36; front 0.10, 0.41; back 0.09, 0.38). The fist is now cut out of the hero picture and drawn again over the handle, so the fingers close round it. Carried tools hang down from the fist and swing with the stride.
 - Running: faster steps, higher foot lift, bigger bounce, leaning into the run seen from the side, shoulders swinging seen from front and back, feet swinging like a pendulum in the side view. A real run needs drawn frames (both legs overlap in the single side picture).
+
+## 2026-11-17 — Painted run cycle; ponds
+- Run cycle: sheet 95 chosen (6 frames, all facing right, steady proportions); 94, 96, 98 kept; 97 rejected (one frame faces left). Frames are cut out one by one (each masked to its own figure), put in one common box: same ground line, body centre fixed, so the run does not slide or jitter. Used for running sideways; front/back still use the shader-animated single pictures. Tool hangs from the leading fist.
+- Ponds: the picture showed trees "in" the water — they were palm shadows falling on it (water now takes only a faint shadow). Ponds are drawn as water (shallow edge, deep middle, ripples, bright edge line, rim of wet earth) instead of a flat blue disc. Clicking a pond now goes and drinks (before, a click on the water only walked there; E worked).
