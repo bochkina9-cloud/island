@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DUSK_START, NIGHT_START } from '../game/data';
+import { DUSK_START, NIGHT_START, RESOURCES, STRUCTURES } from '../game/data';
 import type { Game } from '../game/sim';
 import type { Entity } from '../game/state';
 import { MAP_SIZE, SHORE, type Terrain } from '../game/world';
@@ -30,6 +30,8 @@ const TOOL_ANGLE: Record<string, number> = {
 };
 /** Slim upright things: their shadow is thrown like a person's (see placeCast). */
 const ROUND = new Set(['tree', 'palm', 'sapling', 'grass_tuft', 'boar', 'torch_post', 'vines']);
+/** Natural things: every one a little different in size, proportions and colour. */
+const NATURAL = new Set(['boulder', 'cliff', 'stones', 'tree', 'palm', 'berry_bush', 'grass_tuft', 'sapling', 'vines']);
 /** Things that bend in the wind, and how much. */
 const SWAY: Partial<Record<string, number>> = { palm: 0.6, tree: 0.5, sapling: 1, grass_tuft: 1.4, berry_bush: 0.7, vines: 0.8 };
 
@@ -78,8 +80,13 @@ const SPRITE_VERT = /* glsl */ `
   uniform float uStorm;
   varying vec2 vUv;
   varying vec3 vWorld;
+  varying vec3 vInst;
   void main() {
     vUv = uv;
+    vInst = vec3(1.0);
+    #ifdef USE_INSTANCING_COLOR
+      vInst = instanceColor;
+    #endif
     // Wind: the top leans, the base stays put. uSway is set per object; uWindAmp lets shared
     // materials (decor grass) sway out of step, with the phase taken from where each one stands.
     mat4 mm = modelMatrix;
@@ -105,10 +112,11 @@ const SPRITE_FRAG = /* glsl */ `
   uniform float uUnlit;
   varying vec2 vUv;
   varying vec3 vWorld;
+  varying vec3 vInst;
   void main() {
     vec4 c = texture2D(map, vUv);
     if (c.a < 0.45) discard;
-    vec3 col = c.rgb * uTint;
+    vec3 col = c.rgb * uTint * vInst;
     col = mix(applyLight(applySeason(col), vWorld), col, uUnlit);
     col = mix(col, vec3(1.0, 0.35, 0.3), uFlash);
     gl_FragColor = vec4(col, uOpacity);
@@ -297,6 +305,11 @@ interface SpriteView {
   shadowDepth: number;
   /** Width of the object on the ground, metres. */
   width: number;
+  /** How far in front of the entity's position the picture stands (see footOffset). */
+  off: number;
+  /** This object's own size and proportions (natural things differ from one another). */
+  vw: number;
+  vh: number;
   /** Silhouette cast on the ground. */
   cast: THREE.Mesh;
   /** Dark footprint right under the object (same silhouette, squashed straight back). */
@@ -359,6 +372,9 @@ export class WorldView {
     alias('boulder_2', 'boulder_0');
     alias('boulder_3', 'boulder_1');
     alias('cliff_1', 'boulder_0');
+    alias('cliff_2', 'cliff_1');
+    alias('cliff_3', 'cliff_1');
+    alias('flame_2', 'flame');
     alias('stones_1', 'item_stone');
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -510,8 +526,8 @@ export class WorldView {
    * footprint, which for a picture drawn from above lies behind the bottom edge of the sprite;
    * starting at the bottom edge would put half the shadow in front and make things seem to hover.
    */
-  private placeCast(m: THREE.Mesh, x: number, z: number, mirror: number, width: number, round: boolean) {
-    const len = this.castLength;
+  private placeCast(m: THREE.Mesh, x: number, z: number, mirror: number, width: number, round: boolean, tall = 1) {
+    const len = this.castLength * tall;
     m.matrixAutoUpdate = false;
     if (round) {
       const back = width * 0.45;
@@ -539,8 +555,8 @@ export class WorldView {
    * The footprint: the silhouette squashed straight back from the bottom edge, a little wider and
    * a touch in front, so a soft dark rim shows where the object meets the ground.
    */
-  private placeAo(m: THREE.Mesh, x: number, z: number, mirror: number, height: number) {
-    const depth = Math.min(0.6, 1.0 / Math.max(0.3, height));
+  private placeAo(m: THREE.Mesh, x: number, z: number, mirror: number, height: number, tall = 1) {
+    const depth = Math.min(0.6, 1.0 / Math.max(0.3, height)) * tall;
     m.matrixAutoUpdate = false;
     m.matrix.set(
       mirror * 1.08, 0, 0, x,
@@ -642,13 +658,18 @@ export class WorldView {
       seed = (seed * 1664525 + 1013904223) >>> 0;
       return seed / 4294967296;
     };
-    const items = new Map<string, THREE.Matrix4[]>();
+    const items = new Map<string, { m: THREE.Matrix4; c: THREE.Color }[]>();
     const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(-PITCH, 0, 0));
     const put = (list: string[], x: number, z: number, scale: number) => {
       if (!list.length || t.inPond(x, z)) return;
       const key = list[Math.floor(rnd() * list.length)];
-      const m = new THREE.Matrix4().compose(new THREE.Vector3(x, 0.01, z), tilt, new THREE.Vector3(rnd() < 0.5 ? -scale : scale, scale, scale));
-      (items.get(key) ?? items.set(key, []).get(key)!).push(m);
+      // Each piece its own: proportions and a slightly different shade. Pebbles and shells may be
+      // flipped (no strong light in such small drawings); grass may too.
+      const sx = scale * (0.88 + rnd() * 0.24) * (rnd() < 0.5 ? -1 : 1);
+      const m = new THREE.Matrix4().compose(new THREE.Vector3(x, 0.01, z), tilt, new THREE.Vector3(sx, scale, scale));
+      const b = 0.88 + rnd() * 0.22;
+      const warm = (rnd() - 0.5) * 0.1;
+      (items.get(key) ?? items.set(key, []).get(key)!).push({ m, c: new THREE.Color(b * (1 + warm), b, b * (1 - warm)) });
     };
     const grassy = (x: number, z: number) => t.height(x, z) > 0.075 && t.biome(x, z) !== 'rock';
 
@@ -674,7 +695,7 @@ export class WorldView {
       for (let i = 0; i < n; i++) {
         const side = rnd() < 0.5 ? -1 : 1;
         const x = e.x + side * w * (0.25 + rnd() * 0.3);
-        const z = e.z + 0.04 + rnd() * 0.18;
+        const z = e.z + this.footOffset(e) + 0.04 + rnd() * 0.18;
         // Grass on the meadow, small pebbles on the sand.
         if (grassy(x, z)) put(tufts, x, z, 0.6 + rnd() * 0.45);
         else if (t.height(x, z) > 0.005) put(pebbles, x, z, 0.7 + rnd() * 0.6);
@@ -684,8 +705,12 @@ export class WorldView {
       const mat = this.spriteMaterial(key);
       if (key.startsWith('tuft')) mat.uniforms.uWindAmp = { value: 1 };
       const mesh = new THREE.InstancedMesh(this.geometry(key), mat, list.length);
-      list.forEach((m, i) => mesh.setMatrixAt(i, m));
+      list.forEach((it, i) => {
+        mesh.setMatrixAt(i, it.m);
+        mesh.setColorAt(i, it.c);
+      });
       mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.computeBoundingSphere();
       this.scene.add(mesh);
     }
@@ -728,7 +753,7 @@ export class WorldView {
       case 'palm': return `palm_${v % 3}`;
       case 'tree': return `tree_${v % 3}`;
       case 'boulder': return `boulder_${(v % 3) + 1}`;
-      case 'cliff': return 'cliff_1';
+      case 'cliff': return `cliff_${(v % 3) + 1}`;
       case 'stones': return 'stones_1';
       case 'shelter': return 'tent';
       case 'sapling': return e.regrowOn !== undefined ? 'sapling_bare' : 'sapling';
@@ -784,7 +809,21 @@ export class WorldView {
           contact.renderOrder = 1;
           this.scene.add(contact);
         }
-        v = { entity: e, mesh, mat, shadow, cast, castMat, ao, contact, key, shadowDepth: sw * 0.25 - 0.05, width: e.kind === 'palm' || e.kind === 'tree' ? 0.5 : w };
+        // Natural objects: each one slightly different, decided by its id (so stable across saves).
+        let vw = 1;
+        let vh = 1;
+        if (NATURAL.has(e.kind)) {
+          const hsh = (n: number) => {
+            const x = Math.sin(e.id * 12.9898 + n * 78.233) * 43758.5453;
+            return x - Math.floor(x);
+          };
+          vh = 0.87 + 0.26 * hsh(1);
+          vw = vh * (0.9 + 0.2 * hsh(2));
+          const b = 0.9 + 0.18 * hsh(3);
+          const warm = (hsh(4) - 0.5) * 0.08;
+          mat.uniforms.uTint.value.setRGB(b * (1 + warm), b, b * (1 - warm));
+        }
+        v = { entity: e, mesh, mat, shadow, cast, castMat, ao, contact, key, off: this.footOffset(e), vw, vh, shadowDepth: sw * 0.25 - 0.05, width: e.kind === 'palm' || e.kind === 'tree' ? 0.5 : w };
         if (e.kind === 'campfire') {
           const fm = this.spriteMaterial('flame');
           fm.uniforms.uUnlit.value = 1;
@@ -931,17 +970,21 @@ export class WorldView {
         y = 0.05 + Math.sin(this.clock * 3 + e.id) * 0.04;
       }
       const wobble = (e.work ?? 0) > 0 ? Math.sin(this.clock * 40) * 0.03 : 0;
-      v.mesh.position.set(e.x + wobble, y, e.z);
+      // The picture's bottom edge is the front of the object's footprint; the entity's position
+      // (and its collision circle) is the middle of it.
+      const z = e.z + v.off;
+      sx *= v.vw;
+      sy *= v.vh;
+      v.mesh.position.set(e.x + wobble, y, z);
       v.mesh.scale.set(sx, sy, 1);
-      // Contact shadow under the footprint: painted objects stand on ground that reaches behind their base line.
-      v.shadow.position.set(e.x, 0.02, e.z - v.shadowDepth);
+      v.shadow.position.set(e.x, 0.02, z - v.shadowDepth);
       if (v.cast.visible) {
-        this.placeCast(v.cast, e.x, e.z, sx, v.width, ROUND.has(e.kind));
-        this.placeAo(v.ao, e.x, e.z, sx, this.size(v.key).h);
+        this.placeCast(v.cast, e.x, z, sx, v.width * v.vw, ROUND.has(e.kind), v.vh);
+        this.placeAo(v.ao, e.x, z, sx, this.size(v.key).h * v.vh, v.vh);
       }
       if (v.contact) {
         // Same place as the sprite, 3 cm behind its plane so the sprite covers all but the rim.
-        v.contact.position.set(e.x + wobble, y - 0.03 * Math.sin(PITCH), e.z - 0.03 * Math.cos(PITCH));
+        v.contact.position.set(e.x + wobble, y - 0.03 * Math.sin(PITCH), z - 0.03 * Math.cos(PITCH));
         v.contact.scale.set(sx, sy, 1);
       }
       const onFire = (e.burn ?? 0) > 0;
@@ -956,7 +999,8 @@ export class WorldView {
         v.fire.visible = onFire;
         if (onFire) {
           const big = e.kind === 'tree' || e.kind === 'palm' || e.kind === 'shelter' ? 2 : 1;
-          v.fire.position.set(e.x, 0.1, e.z + 0.05);
+          v.fire.position.set(e.x, 0.1, z + 0.05);
+          v.fire.material = this.flameFrame(e.id);
           v.fire.scale.set(big * (1 + Math.sin(this.clock * 15 + e.id) * 0.08), big * (1 + Math.sin(this.clock * 9 + e.id) * 0.12), 1);
         }
       }
@@ -968,9 +1012,10 @@ export class WorldView {
           // Over the logs in the middle of the painted fire ring: up the sprite's plane by
           // FLAME_AT of its height, then a little towards the camera so the flame is in front.
           const s = this.size(v.key).h * (this.sprites[v.key].painted ? FLAME_AT : 0.1);
-          v.flame.position.set(e.x, s * Math.cos(PITCH) + 0.06 * Math.sin(PITCH), e.z - s * Math.sin(PITCH) + 0.06 * Math.cos(PITCH));
-          // A small fire under the pot, as in the reference (the painted ring is much smaller than the old one).
-          const f = this.sprites[v.key].painted ? 0.4 : 1;
+          v.flame.position.set(e.x, s * Math.cos(PITCH) + 0.06 * Math.sin(PITCH), z - s * Math.sin(PITCH) + 0.06 * Math.cos(PITCH));
+          v.flame.material = this.flameFrame(e.id);
+          // A small fire under the pot, as in the reference. The painted flame is drawn small already.
+          const f = this.sprites.flame.painted ? 1 : this.sprites[v.key].painted ? 0.4 : 1;
           v.flame.scale.set(f * k * (1 + Math.sin(this.clock * 17 + e.id) * 0.06), f * k * (1 + Math.sin(this.clock * 11) * 0.1), 1);
         }
       }
@@ -985,6 +1030,32 @@ export class WorldView {
     this.camera.lookAt(cam.x, cam.y - Math.sin(PITCH) * this.zoom, cam.z - Math.cos(PITCH) * this.zoom);
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * How far in front of an entity's position its picture stands. A painted rock's bottom edge is
+   * the front of its footprint, which reaches back about as far as the object is wide; the
+   * collision circle must sit in the middle of that footprint, or the hero walks into the back
+   * half of the rock. Slim things (trees, the hero) stand on their own base point.
+   */
+  private footOffset(e: Entity): number {
+    if (ROUND.has(e.kind)) return 0;
+    const res = (RESOURCES as Record<string, { solid?: number }>)[e.kind];
+    const str = (STRUCTURES as Record<string, { solid: number }>)[e.kind];
+    return (res?.solid ?? str?.solid ?? 0) * 0.85;
+  }
+
+  /** Two painted flame drawings, alternated quickly: the fire flickers. */
+  private flameMats: THREE.ShaderMaterial[] = [];
+  private flameFrame(id: number): THREE.ShaderMaterial {
+    if (!this.flameMats.length) {
+      for (const k of ['flame', 'flame_2']) {
+        const m = this.spriteMaterial(this.sprites[k] ? k : 'flame');
+        m.uniforms.uUnlit.value = 1;
+        this.flameMats.push(m);
+      }
+    }
+    return this.flameMats[Math.floor(this.clock * 7 + id * 0.37) % 2];
   }
 
   /** Shadow length over the day: short around noon, long towards evening. */
@@ -1103,8 +1174,9 @@ export class WorldView {
       const e = v.entity;
       if (!v.mesh.visible) continue;
       const { w, h } = this.size(v.key, e.kind === 'drop' ? 0.7 : 1);
-      const base = this.project(v3.set(e.x, 0, e.z));
-      const top = this.project(v3.set(e.x, h * Math.cos(PITCH), e.z - h * Math.sin(PITCH)));
+      const fz = e.z + v.off;
+      const base = this.project(v3.set(e.x, 0, fz));
+      const top = this.project(v3.set(e.x, h * Math.cos(PITCH), fz - h * Math.sin(PITCH)));
       const pxPerUnit = Math.abs(base.y - top.y) / Math.max(0.01, h);
       const halfW = Math.max(14, (w * pxPerUnit) / 2) * 0.7;
       const minY = top.y + (base.y - top.y) * 0.1;

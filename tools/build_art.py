@@ -46,8 +46,14 @@ ASSETS = {
     'boulder_1': ('boulder_1', 1.05, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
     'boulder_2': ('boulder_2', 0.9, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
     'boulder_3': ('boulder_3', 0.95, {'gain': 1.06, 'sat': 0.9, 'warm': -0.02}),
-    # Earlier, sunnier generations: pulled down to the reference's grey-brown.
-    'cliff_1': ('cliff_1', 2.6, {'gain': 0.74, 'sat': 0.8, 'warm': 0.0}),
+    # High three-quarter cliffs (their base sits flat on the ground); three kinds so neighbours differ.
+    'cliff_1': ('cliff_1', 2.3, {'gain': 0.95, 'sat': 0.88, 'warm': 0.0}),
+    'cliff_2': ('cliff_2', 2.3, {'gain': 0.95, 'sat': 0.88, 'warm': 0.0}),
+    'cliff_3': ('cliff_3', 2.2, {'gain': 0.95, 'sat': 0.88, 'warm': 0.0}),
+    # Campfire flame: two drawings, alternated for flicker. Drawn on black.
+    'flame': ('flame', 0.6, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0}),
+    'flame_2': ('flame_2', 0.6, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0}),
+    # Earlier, sunnier generation: pulled down to the reference's grey-brown.
     'stones_1': ('stones_1', 0.45, {'gain': 0.68, 'sat': 0.7, 'warm': -0.05}),
     # Grass tufts: all four kept for variety; colours as painted (they already match the reference).
     'tuft_1': ('tuft_1', 0.5, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}),
@@ -135,6 +141,27 @@ def anchors(im: Image.Image, key: str) -> dict:
     return out
 
 
+def green_base(im: Image.Image) -> Image.Image:
+    """Grass tufts come with a patch of brown earth and litter at the root. Repaint it in the
+    meadow's olive (keeping light and shade) and fade the very bottom, so the tuft grows out of
+    the grass instead of sitting on a brown disc."""
+    a = np.asarray(im).astype(np.float32)
+    h = a.shape[0]
+    rgb, alpha = a[..., :3], a[..., 3]
+    y = (np.arange(h) / h)[:, None]
+    lower = np.clip((y - 0.6) / 0.2, 0, 1)  # from 60% down, full from 80%
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    brown = np.clip((r - g) / 30 + 0.3, 0, 1) * np.clip((g - b) / 25 + 0.5, 0, 1)
+    lum = rgb @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    olive = np.array([150, 140, 76], dtype=np.float32)
+    target = olive[None, None, :] * (lum / 136.0)[..., None] * 0.95
+    k = (brown * lower)[..., None]
+    rgb = rgb * (1 - k) + target * k
+    alpha = alpha * (1 - np.clip((y - 0.9) / 0.1, 0, 1) * 0.85)
+    out = np.dstack([np.clip(rgb, 0, 255), alpha]).astype(np.uint8)
+    return Image.fromarray(out, 'RGBA')
+
+
 def split_sheet(im: Image.Image) -> list[Image.Image]:
     """Separate objects on a cut-out sheet: connected areas of the alpha mask, left to right, top to bottom."""
     k = 4
@@ -177,6 +204,8 @@ def main() -> None:
         cut(find(src), tmp, strict=g.get('strict', False))
         im = Image.open(tmp)
         im = grade(im, g['gain'], g['sat'], g['warm'])
+        if key.startswith('tuft_'):
+            im = green_base(im)
         if im.size[1] > MAX_SPRITE_HEIGHT:
             im = im.resize((im.size[0] * MAX_SPRITE_HEIGHT // im.size[1], MAX_SPRITE_HEIGHT), Image.LANCZOS)
         im.save(os.path.join(OUT, key + '.png'))

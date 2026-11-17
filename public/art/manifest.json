@@ -112,10 +112,38 @@
   },
   "cliff_1": {
    "file": "art/cliff_1.png",
-   "w": 564,
+   "w": 690,
    "h": 640,
-   "size": 2.6,
-   "footX": 0.559
+   "size": 2.3,
+   "footX": 0.546
+  },
+  "cliff_2": {
+   "file": "art/cliff_2.png",
+   "w": 620,
+   "h": 640,
+   "size": 2.3,
+   "footX": 0.545
+  },
+  "cliff_3": {
+   "file": "art/cliff_3.png",
+   "w": 734,
+   "h": 640,
+   "size": 2.2,
+   "footX": 0.501
+  },
+  "flame": {
+   "file": "art/flame.png",
+   "w": 515,
+   "h": 640,
+   "size": 0.6,
+   "footX": 0.503
+  },
+  "flame_2": {
+   "file": "art/flame_2.png",
+   "w": 439,
+   "h": 640,
+   "size": 0.6,
+   "footX": 0.516
   },
   "stones_1": {
    "file": "art/stones_1.png",

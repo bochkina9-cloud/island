@@ -59,3 +59,9 @@
 ## 2026-11-17 — "The back of the rock is lifted"
 - A painted rock's bottom outline is not a straight line: towards the back it climbs. Ground shadows were tied to the sprite's bottom line, so lit grass showed under the climbing part, and the rock looked tilted and lifted.
 - Added a contact rim: the sprite's own alpha, drawn in its plane 3 cm behind it and shifted down 10 cm, blurred and dark, only from the lower 40% of the sprite. It peeks out exactly along the painted outline. Applied to broad painted objects (rocks, cliff, tent, chest, campfire).
+
+## 2026-11-17 — Walking into rocks; brown tuft bases; identical rocks
+- The hero could walk into the back half of a rock: the collision circle was centred on the picture's bottom edge (the front of the footprint). Pictures of broad solid things now stand 0.85 × collision radius in front of the entity, so the circle sits under the middle of the drawn footprint (render only; game logic unchanged).
+- Tuft bases: brown earth and litter repainted in the meadow's olive at build time (light and shade kept), the very bottom faded, so tufts grow out of the grass.
+- Variety: three new high-angle cliffs (79, 80, 81) replace the low-angle one (kept in candidates). Every natural object (rocks, cliffs, trees, bushes, grass) gets its own size ±13 %, proportions ±10 % and shade/warmth, fixed by its id; decor pieces get the same per instance (instance colours). Lit objects are never mirrored (the light would flip).
+- Flame: 84 + 83 alternated for flicker; 82, 85 kept as candidates.
