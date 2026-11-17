@@ -208,13 +208,15 @@ export class Terrain {
     const wanted: Record<IslandKind, number> = { home: 2, forest: 1, rocky: 0 };
     for (const is of this.islands) {
       let placed = 0;
-      for (let attempt = 0; attempt < 400 && placed < wanted[is.kind]; attempt++) {
+      // Lakes lie inland: first try for 11 m of land all round, then settle for less on small islands.
+      for (let attempt = 0; attempt < 1200 && placed < wanted[is.kind]; attempt++) {
+        const shoreGap = attempt < 400 ? 11 : attempt < 800 ? 8 : 5;
         const a = rng() * Math.PI * 2;
         const r = rng() * is.r * 0.6;
         const x = is.x + Math.cos(a) * r;
         const z = is.z + Math.sin(a) * r;
         const b = this.biome(x, z);
-        if ((b === 'grass' || b === 'forest') && this.height(x, z) > 0.18 && this.islandAt(x, z) === is) {
+        if ((b === 'grass' || b === 'forest') && this.height(x, z) > 0.18 && this.islandAt(x, z) === is && this.inland(x, z, shoreGap)) {
           const nearBay = this.bay && Math.hypot(x - this.bay.x, z - this.bay.z) < 18;
           if (!nearBay && this.ponds.every((p) => (p.x - x) ** 2 + (p.z - z) ** 2 > 22 * 22)) {
             this.ponds.push({ x, z, r: 1.6 + rng() * 1.2 });
@@ -225,7 +227,18 @@ export class Terrain {
     }
   }
 
-  get home(): Island {
+  /** True if there is dry land all around for this many metres: lakes lie inland, not by the sea. */
+  private inland(x: number, z: number, dist: number): boolean {
+    for (let r = 3; r <= dist; r += 4) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        if (this.height(x + Math.cos(a) * r, z + Math.sin(a) * r) < SHORE + 0.06) return false;
+      }
+    }
+    return true;
+  }
+
+    get home(): Island {
     return this.islands.find((i) => i.kind === 'home')!;
   }
 

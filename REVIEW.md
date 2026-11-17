@@ -65,3 +65,6 @@
 - Tuft bases: brown earth and litter repainted in the meadow's olive at build time (light and shade kept), the very bottom faded, so tufts grow out of the grass.
 - Variety: three new high-angle cliffs (79, 80, 81) replace the low-angle one (kept in candidates). Every natural object (rocks, cliffs, trees, bushes, grass) gets its own size ±13 %, proportions ±10 % and shade/warmth, fixed by its id; decor pieces get the same per instance (instance colours). Lit objects are never mirrored (the light would flip).
 - Flame: 84 + 83 alternated for flicker; 82, 85 kept as candidates.
+
+## 2026-11-17 — Ponds inland
+- Lakes appeared right by the sea. Ponds now need dry land all round: 11 m, falling back to 8 m and 5 m on small islands so every island still gets its pond. Checked on six seeds: 12–18 m from the sea.
