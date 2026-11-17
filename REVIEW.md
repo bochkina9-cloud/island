@@ -68,3 +68,8 @@
 
 ## 2026-11-17 — Ponds inland
 - Lakes appeared right by the sea. Ponds now need dry land all round: 11 m, falling back to 8 m and 5 m on small islands so every island still gets its pond. Checked on six seeds: 12–18 m from the sea.
+
+## 2026-11-17 — Running; tools in the fist; pickable grass
+- Grass picking worked (tested: +2 grass), but decor tufts looked exactly like pickable ones. Pickable grass now uses the two fullest tufts at full size; decor uses the others, at half size.
+- Tools floated over the hand: the side-view hand anchor was wrong (0.60, 0.45 → measured 0.71, 0.36; front 0.10, 0.41; back 0.09, 0.38). The fist is now cut out of the hero picture and drawn again over the handle, so the fingers close round it. Carried tools hang down from the fist and swing with the stride.
+- Running: faster steps, higher foot lift, bigger bounce, leaning into the run seen from the side, shoulders swinging seen from front and back, feet swinging like a pendulum in the side view. A real run needs drawn frames (both legs overlap in the single side picture).

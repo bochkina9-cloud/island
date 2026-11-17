@@ -17,10 +17,10 @@ const FLAME_AT = 0.27;
 const SUN_DIR = { x: -0.92, z: -0.38 };
 const POSES = ['pose_swing_up', 'pose_swing_down', 'pose_thrust', 'pose_hold_forward', 'pose_pickup', 'pose_paddle'];
 /** Where the tool hand is on the walking frames (fraction of the sprite, y from the feet). */
-const WALK_HAND: Record<'front' | 'side' | 'back', [number, number]> = { front: [0.12, 0.46], side: [0.6, 0.45], back: [0.9, 0.47] };
+const WALK_HAND: Record<'front' | 'side' | 'back', [number, number]> = { front: [0.1, 0.41], side: [0.71, 0.36], back: [0.09, 0.38] };
 /** How the tool turns in each pose (radians, counter-clockwise, hero facing right). */
 const TOOL_ANGLE: Record<string, number> = {
-  walk: -1.8,
+  walk: -2.4,
   pose_swing_up: 1.0,
   pose_swing_down: -1.45,
   pose_thrust: -0.8,
@@ -28,6 +28,7 @@ const TOOL_ANGLE: Record<string, number> = {
   pose_pickup: -1.2,
   pose_paddle: -2.2,
 };
+const GATHER_TUFTS = ['tuft_1', 'tuft_4'];
 /** Slim upright things: their shadow is thrown like a person's (see placeCast). */
 const ROUND = new Set(['tree', 'palm', 'sapling', 'grass_tuft', 'boar', 'torch_post', 'vines']);
 /** Natural things: every one a little different in size, proportions and colour. */
@@ -133,6 +134,7 @@ const HERO_FRAG = /* glsl */ `
   uniform float uFlash;
   uniform float uFootX;
   uniform float uStride;
+  uniform float uSwing;
   uniform vec2 uLift;
   varying vec2 vUv;
   varying vec3 vWorld;
@@ -140,12 +142,35 @@ const HERO_FRAG = /* glsl */ `
     vec2 uv = vUv;
     float leg = clamp(1.0 - uv.y / 0.42, 0.0, 1.0);
     float side = uv.x < uFootX ? -1.0 : 1.0;
-    uv.x -= side * uStride * leg;
+    uv.x -= side * uStride * leg + uSwing * leg * leg;
     uv.y -= (side < 0.0 ? uLift.x : uLift.y) * leg;
     vec4 c = texture2D(map, uv);
     if (uv.y < 0.0 || c.a < 0.45) discard;
     vec3 col = applyLight(c.rgb, vWorld);
     col = mix(col, vec3(1.0, 0.35, 0.3), uFlash);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+/**
+ * The hero's fist, cut out of the hero picture and drawn again over the tool's handle, so the
+ * fingers close round the handle instead of the tool lying on top of the hand.
+ */
+const HAND_FRAG = /* glsl */ `
+  ${LIGHT_GLSL}
+  uniform sampler2D map;
+  uniform vec2 uHand;
+  uniform float uAspect;
+  uniform float uR;
+  uniform float uFlash;
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  void main() {
+    vec2 d = (vUv - uHand) * vec2(uAspect, 1.0);
+    if (length(d) > uR) discard;
+    vec4 c = texture2D(map, vUv);
+    if (c.a < 0.45) discard;
+    vec3 col = mix(applyLight(c.rgb, vWorld), vec3(1.0, 0.35, 0.3), uFlash);
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -352,6 +377,8 @@ export class WorldView {
   private heightTex!: THREE.DataTexture;
   private grassTex!: THREE.Texture;
   private heroAo!: THREE.Mesh;
+  private heroBody!: THREE.Group;
+  private heroHand!: THREE.Mesh;
   private clock = 0;
   private sprites: Record<string, LoadedSprite>;
   zoom = 13;
@@ -427,6 +454,7 @@ export class WorldView {
         uFlash: { value: 0 },
         uFootX: { value: 0.5 },
         uStride: { value: 0 },
+        uSwing: { value: 0 },
         uLift: { value: new THREE.Vector2() },
       },
       vertexShader: SPRITE_VERT,
@@ -439,9 +467,30 @@ export class WorldView {
     tg.translate(0.8 * 0.22, 0.8 * 0.3, 0);
     const tool = new THREE.Mesh(tg, toolMat);
     tool.visible = false;
+    const handMat = new THREE.ShaderMaterial({
+      uniforms: {
+        ...shared,
+        map: { value: this.texture('hero_front') },
+        uHand: { value: new THREE.Vector2() },
+        uAspect: { value: 0.4 },
+        uR: { value: 0.035 },
+        uFlash: { value: 0 },
+      },
+      vertexShader: SPRITE_VERT,
+      fragmentShader: HAND_FRAG,
+    });
+    const handMesh = new THREE.Mesh(mesh.geometry, handMat);
+    handMesh.position.z = 0.03;
+    handMesh.visible = false;
+    tool.position.z = 0.015;
+    // body leans and sways as a whole: picture, tool and fist together.
+    const body = new THREE.Group();
+    body.add(mesh, tool, handMesh);
     const group = new THREE.Group();
     group.rotation.x = -PITCH;
-    group.add(mesh, tool);
+    group.add(body);
+    this.heroBody = body;
+    this.heroHand = handMesh;
     const castMat = this.castMaterial('hero_front');
     const cast = new THREE.Mesh(this.geometry('hero_front'), castMat);
     cast.renderOrder = 1;
@@ -651,7 +700,8 @@ export class WorldView {
     const painted = (prefix: string) => Array.from({ length: 12 }, (_, i) => `${prefix}_${i + 1}`).filter((k) => this.sprites[k]?.painted);
     const shells = painted('shell');
     const pebbles = painted('pebble');
-    const tufts = painted('tuft');
+    // Decor grass: not the kinds you can pick (those would look pickable), and smaller.
+    const tufts = painted('tuft').filter((k) => !GATHER_TUFTS.includes(k));
     const t = this.game.terrain;
     let seed = t.seed ^ 0x5eaf00d;
     const rnd = () => {
@@ -683,7 +733,7 @@ export class WorldView {
         if (beach && r < 0.05) put(shells, px, pz, 0.8 + rnd() * 0.5);
         else if (beach && r < 0.12) put(pebbles, px, pz, 0.8 + rnd() * 0.5);
         else if (h > 0.05 && t.biome(px, pz) === 'grass' && r < 0.012) put(pebbles, px, pz, 0.8 + rnd() * 0.5);
-        else if (grassy(px, pz) && r < 0.1) put(tufts, px, pz, 0.7 + rnd() * 0.5);
+        else if (grassy(px, pz) && r < 0.1) put(tufts, px, pz, 0.5 + rnd() * 0.3);
       }
     }
     // Tufts at the foot of things, a little in front of their bottom edge so they overlap it.
@@ -697,7 +747,7 @@ export class WorldView {
         const x = e.x + side * w * (0.25 + rnd() * 0.3);
         const z = e.z + this.footOffset(e) + 0.04 + rnd() * 0.18;
         // Grass on the meadow, small pebbles on the sand.
-        if (grassy(x, z)) put(tufts, x, z, 0.6 + rnd() * 0.45);
+        if (grassy(x, z)) put(tufts, x, z, 0.5 + rnd() * 0.35);
         else if (t.height(x, z) > 0.005) put(pebbles, x, z, 0.7 + rnd() * 0.6);
       }
     }
@@ -757,7 +807,8 @@ export class WorldView {
       case 'stones': return 'stones_1';
       case 'shelter': return 'tent';
       case 'sapling': return e.regrowOn !== undefined ? 'sapling_bare' : 'sapling';
-      case 'grass_tuft': return `tuft_${(e.id % 4) + 1}`;
+      // Grass you can pick: the two fullest tufts, full size. Decor grass uses the others, smaller.
+      case 'grass_tuft': return GATHER_TUFTS[e.id % GATHER_TUFTS.length];
       case 'berry_bush': return e.regrowOn !== undefined ? 'berry_bush_empty' : 'berry_bush';
       case 'boar': return 'boar_0';
       case 'vines': return e.regrowOn !== undefined ? 'vines_cut' : 'vines';
@@ -1076,7 +1127,7 @@ export class WorldView {
     h.lastZ = p.z;
     if (g.moving && Math.hypot(dx, dz) > 1e-4) {
       h.view = Math.abs(dz) > Math.abs(dx) * 1.2 ? (dz < 0 ? 'back' : 'front') : 'side';
-      h.phase += dt * 9;
+      h.phase += dt * 11; // a jog: about three steps a second
     } else {
       // Settle into a standing pose.
       const k = h.phase % Math.PI;
@@ -1113,21 +1164,28 @@ export class WorldView {
     const s = Math.sin(h.phase);
     const stride = walking || h.phase % Math.PI > 0.05 ? s : 0;
     if (h.view === 'side' && !posed) {
+      // Side view: both legs are drawn over each other, so spread them only a little and swing the
+      // feet back and forth like a pendulum in time with the steps.
       h.mat.uniforms.uStride.value = Math.abs(stride) * 0.06;
+      h.mat.uniforms.uSwing.value = Math.cos(h.phase) * 0.09 * (walking ? 1 : 0);
       h.mat.uniforms.uLift.value.set(0, 0);
     } else if (!posed) {
       h.mat.uniforms.uStride.value = 0;
-      h.mat.uniforms.uLift.value.set(Math.max(0, stride) * 0.06, Math.max(0, -stride) * 0.06);
+      h.mat.uniforms.uSwing.value = 0;
+      h.mat.uniforms.uLift.value.set(Math.max(0, stride) * 0.1, Math.max(0, -stride) * 0.1);
     } else {
       h.mat.uniforms.uStride.value = 0;
+      h.mat.uniforms.uSwing.value = 0;
       h.mat.uniforms.uLift.value.set(0, 0);
     }
     // The body is highest when the legs pass each other.
-    const bob = sailing ? 0.28 + Math.sin(this.clock * 2.2) * 0.05 : walking ? (1 - Math.abs(stride)) * 0.04 : 0;
+    const bob = sailing ? 0.28 + Math.sin(this.clock * 2.2) * 0.05 : walking ? (1 - Math.abs(stride)) * 0.07 : 0;
     h.group.position.set(p.x, bob, p.z);
     h.mesh.scale.set(mirror, 1, 1);
     // A slight sway of the shoulders while walking towards or away from the camera.
-    h.mesh.rotation.z = walking && h.view !== 'side' ? stride * 0.025 : 0;
+    // Running: leaning into the step seen from the side, shoulders swinging seen from the front or back.
+    h.mesh.rotation.z = 0;
+    this.heroBody.rotation.z = walking ? (h.view === 'side' ? -mirror * 0.08 : stride * 0.045) : 0;
     h.shadow.position.set(p.x, 0.02, p.z - 0.12);
     h.shadow.visible = false;
     h.cast.visible = !sailing;
@@ -1139,16 +1197,26 @@ export class WorldView {
     // Tool in the fist.
     const hand = p.hand;
     h.tool.visible = !!hand && key !== 'pose_paddle';
+    this.heroHand.visible = h.tool.visible && key !== 'pose_pickup';
     if (hand) {
       h.toolMat.uniforms.map.value = this.texture(`item_${hand.item}`);
       h.toolMat.uniforms.uUnlit.value = hand.item === 'torch' ? 1 : 0;
       const { w, h: ht } = this.size(key);
       const foot = sprite.footX ?? 0.5;
       const [hx, hy] = sprite.handX !== undefined ? [sprite.handX, sprite.handY ?? 0.5] : WALK_HAND[h.view];
-      h.tool.position.set((hx - foot) * w * mirror, hy * ht + (key.startsWith('hero_') ? Math.abs(stride) * 0.02 : 0), h.view === 'back' ? -0.02 : 0.02);
+      h.tool.position.set((hx - foot) * w * mirror, hy * ht, 0.015);
+      // The fist over the handle (centre a little inside the outline the anchors were measured at).
+      const hm = this.heroHand.material as THREE.ShaderMaterial;
+      hm.uniforms.map.value = h.mat.uniforms.map.value;
+      hm.uniforms.uFlash.value = h.mat.uniforms.uFlash.value;
+      const inward = sprite.handX !== undefined ? (key === 'pose_swing_up' ? [0, -0.02] : [-0.025, 0]) : [0, 0];
+      hm.uniforms.uHand.value.set(hx + inward[0], hy + inward[1]);
+      hm.uniforms.uAspect.value = w / ht;
+      this.heroHand.geometry = h.mesh.geometry;
+      this.heroHand.scale.set(mirror, 1, 1);
       let ang = TOOL_ANGLE[key] ?? TOOL_ANGLE.walk;
       if (hand.item === 'torch' && !key.startsWith('pose_')) ang = -0.5;
-      if (key.startsWith('hero_') && walking) ang += stride * 0.12;
+      if (key.startsWith('hero_') && walking) ang += stride * 0.25; // the arm swings with the stride
       h.tool.scale.set(mirror, 1, 1);
       h.tool.rotation.set(0, 0, ang * mirror);
     }

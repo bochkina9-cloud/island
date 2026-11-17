@@ -17,3 +17,7 @@ duplicates removed. Moved to art/incoming/ (or candidates/) when chosen.
 | sticks_1..3 | Pile of dry sticks | |
 | post_1..3 | Mooring post with rope | for the raft |
 | ground_sand_1..3 | Sand texture, top-down | to tile the beaches |
+| chest_lid_1..3 | Chest with a rounded lid, iron bands, hasp | |
+| palm_tall_1..3 | Coconut palm, curved trunk, coconuts | |
+| palm_young_1 | Young palm, straight trunk | |
+| palm_young_noref_1, 2 | Young palm, made without the style reference | softer, little ink: compare |
