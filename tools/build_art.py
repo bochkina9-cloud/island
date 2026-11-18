@@ -55,6 +55,21 @@ ASSETS = {
     'flame_2': ('flame_2', 0.6, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0}),
     # Earlier, sunnier generation: pulled down to the reference's grey-brown.
     'stones_1': ('stones_1', 0.45, {'gain': 0.68, 'sat': 0.7, 'warm': -0.05}),
+    # Vegetation and camp things (from the inbox, chosen 18.11).
+    **{f'tree_{i}': (f'tree_{i}', 4.6, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0, 'strict': True}) for i in range(1, 7)},
+    **{f'palm_{i}': (f'palm_tall_{i}', 6.0, {'gain': 1.0, 'sat': 0.92, 'warm': 0.0}) for i in range(1, 4)},
+    'palm_4': ('palm_young_1', 3.6, {'gain': 1.0, 'sat': 0.92, 'warm': 0.0}),
+    **{f'bush_{i}': (f'bush_{i}', 1.15, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0, 'strict': True}) for i in range(1, 4)},
+    **{f'bush_berries_{i}': (f'bush_berries_{i}', 1.15, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}) for i in range(1, 4)},
+    **{f'sapling_{i}': (f'sapling_{i}', 1.7, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0, 'strict': True}) for i in range(1, 4)},
+    'chest': ('chest_lid_1', 0.85, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}),
+    'jug': ('jug_1', 0.55, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}),
+    'post': ('post_1', 0.9, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}),
+    **{f'tuft_{i + 4}': (f'grass_tuft_{i + 4}', 0.5, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}) for i in range(1, 4)},
+    **{f'flowers_{i}': (f'flowers_{i}', 0.35, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}) for i in range(1, 4)},
+    **{f'sticks_{i}': (f'sticks_{i}', 0.3, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}) for i in range(1, 4)},
+    # Ponds seen from above; laid flat on the ground (size is unused).
+    **{f'pond_{i}': (f'pond_{i}', 1.0, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0}) for i in range(1, 4)},
     # Grass tufts: all four kept for variety; colours as painted (they already match the reference).
     'tuft_1': ('tuft_1', 0.5, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}),
     'tuft_2': ('tuft_2', 0.5, {'gain': 1.0, 'sat': 1.0, 'warm': 0.0, 'strict': True}),
@@ -63,12 +78,14 @@ ASSETS = {
 }
 TEXTURES = {
     'ground_grass': 'ground_grass',
+    'ground_sand': 'ground_sand_2',
 }
 # Sheets with several small objects: split into <key>_1, <key>_2, ... Height in metres of the
 # tallest piece; the others keep their size relative to it.
 SHEETS = {
     'shell': ('shells', 0.2, {'gain': 1.0, 'sat': 0.9, 'warm': 0.0}),
     'pebble': ('pebbles', 0.16, {'gain': 1.0, 'sat': 0.85, 'warm': 0.0}),
+    'reed': ('reeds', 1.2, {'gain': 1.0, 'sat': 0.95, 'warm': 0.0}),
 }
 # Painted top-down backgrounds: key -> (source, size of the square in metres).
 BACKDROPS = {
@@ -76,8 +93,11 @@ BACKDROPS = {
 }
 BAY_TS = os.path.join(ROOT, 'src', 'game', 'bay_shape.ts')
 # Animation strips: key -> (source, frames, height in metres of the strip's common box).
+# Height may be ('match', i, metres): frame i's figure is that tall (the box is taller, e.g. a raised axe).
 STRIPS = {
     'run': ('run_side', 6, 1.78, HERO),
+    'chop': ('chop_side', 4, ('match', 0, 1.8), HERO),
+    'boar': ('boar_run', 6, 0.95, {'gain': 1.05, 'sat': 0.95, 'warm': 0.0}),
 }
 MAX_SPRITE_HEIGHT = 640  # px; enough for close-ups, keeps memory in check
 
@@ -227,7 +247,7 @@ def strip_frames(im: Image.Image, n: int) -> list[tuple[Image.Image, float]]:
             sx = x0 + xx
             if 0 <= sx < a.shape[1]:
                 canvas[:bottom - top + 1, xx] = src[top:bottom + 1, sx]
-        out.append((Image.fromarray(canvas, 'RGBA'), 0.5))
+        out.append((Image.fromarray(canvas, 'RGBA'), 0.5, int(np.ptp(mask.nonzero()[0])) + 1, bottom - top + 9))
     return out
 
 
@@ -273,7 +293,7 @@ def main() -> None:
         cut(find(src), tmp, strict=g.get('strict', False))
         im = Image.open(tmp)
         im = grade(im, g['gain'], g['sat'], g['warm'])
-        if key.startswith('tuft_'):
+        if key.startswith('tuft_') or key.startswith('flowers_'):
             im = green_base(im)
         if im.size[1] > MAX_SPRITE_HEIGHT:
             im = im.resize((im.size[0] * MAX_SPRITE_HEIGHT // im.size[1], MAX_SPRITE_HEIGHT), Image.LANCZOS)
@@ -298,12 +318,18 @@ def main() -> None:
     for key, (src, n, height, g) in STRIPS.items():
         cut(find(src), tmp, near=14, far=34)
         frames = strip_frames(grade(Image.open(tmp), g['gain'], g['sat'], g['warm']), n)
-        for i, (fr, foot) in enumerate(frames, 1):
+        if isinstance(height, tuple):
+            _, ref, metres = height
+            height = round(metres * frames[ref][3] / frames[ref][2], 3)
+        for i, (fr, foot, _, _) in enumerate(frames, 1):
             if fr.size[1] > MAX_SPRITE_HEIGHT:
                 fr = fr.resize((fr.size[0] * MAX_SPRITE_HEIGHT // fr.size[1], MAX_SPRITE_HEIGHT), Image.LANCZOS)
             name = f'{key}_{i}'
             fr.save(os.path.join(OUT, name + '.png'))
             entry = {'file': f'art/{name}.png', 'w': fr.size[0], 'h': fr.size[1], 'size': height, 'footX': foot}
+            if key == 'boar':
+                manifest['sprites'][name] = entry
+                continue
             # The leading fist (furthest right at arm height) carries the tool.
             al = np.asarray(fr)[..., 3] > 128
             hh, ww = al.shape

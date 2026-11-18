@@ -77,3 +77,10 @@
 ## 2026-11-17 — Painted run cycle; ponds
 - Run cycle: sheet 95 chosen (6 frames, all facing right, steady proportions); 94, 96, 98 kept; 97 rejected (one frame faces left). Frames are cut out one by one (each masked to its own figure), put in one common box: same ground line, body centre fixed, so the run does not slide or jitter. Used for running sideways; front/back still use the shader-animated single pictures. Tool hangs from the leading fist.
 - Ponds: the picture showed trees "in" the water — they were palm shadows falling on it (water now takes only a faint shadow). Ponds are drawn as water (shallow edge, deep middle, ripples, bright edge line, rim of wet earth) instead of a flat blue disc. Clicking a pond now goes and drinks (before, a click on the water only walked there; E worked).
+
+## 2026-11-18 — Inbox built into the game
+- Trees: tree_1..6 (all), one per entity id; palms: palm_tall_1..3 + palm_young_1 (3 tall to 1 young); bushes: bush_1..3 / bush_berries_1..3 (picked bush shows the plain one); saplings 1..3 (picked: drawn shorter); chest: chest_lid_1; jug by the tent and a mooring post by the raft (decor); twigs on the ground: sticks_1..3; extra decor grass tufts 5..7 and white flowers in meadows; sand texture (ground_sand_2) on all beaches.
+- Painted ponds (pond_1..3) with ripples, glints and two fish shadows circling; reeds and cattails (sheet reeds_1, 4 kinds) round the far side of every pond.
+- Boar: painted 6-frame gallop (sheet 104), slower when wandering, fast when charging; first frame when standing.
+- Chopping: painted 4-frame swing (sheet 101), axe drawn in both hands (no overlaid tool).
+- Still placeholders: raft, stump, flint, coconut, driftwood, vines, nest, built structures, item icons.

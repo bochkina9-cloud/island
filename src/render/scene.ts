@@ -29,6 +29,8 @@ const TOOL_ANGLE: Record<string, number> = {
   pose_paddle: -2.2,
 };
 const GATHER_TUFTS = ['tuft_1', 'tuft_4'];
+/** Three tall palms for every young one. */
+const PALMS = ['palm_1', 'palm_2', 'palm_3', 'palm_4', 'palm_1', 'palm_2', 'palm_3'];
 /** Slim upright things: their shadow is thrown like a person's (see placeCast). */
 const ROUND = new Set(['tree', 'palm', 'sapling', 'grass_tuft', 'boar', 'torch_post', 'vines']);
 /** Natural things: every one a little different in size, proportions and colour. */
@@ -252,6 +254,9 @@ const GROUND_FRAG = /* glsl */ `
   uniform sampler2D uGrass;
   uniform vec3 uGrassMean;
   uniform float uHasGrass;
+  uniform sampler2D uSand;
+  uniform vec3 uSandMean;
+  uniform float uHasSand;
   varying vec2 vUv;
   varying vec3 vWorld;
   void main() {
@@ -264,6 +269,10 @@ const GROUND_FRAG = /* glsl */ `
     float green = smoothstep(0.3, 0.42, (c.g - c.b) / max(c.g, 0.01)) * uHasGrass;
     vec3 detail = 1.0 + (texture2D(uGrass, vWorld.xz / 3.0).rgb / uGrassMean - 1.0) * 2.2;
     c.rgb *= mix(vec3(1.0), detail, green);
+    // Painted sand grain on the beaches.
+    float sandy = smoothstep(0.16, 0.26, c.r - c.b) * (1.0 - green) * uHasSand;
+    vec3 grain = 1.0 + (texture2D(uSand, vWorld.xz / 3.5).rgb / uSandMean - 1.0) * 1.6;
+    c.rgb *= mix(vec3(1.0), grain, sandy);
     gl_FragColor = vec4(applyLight(applySeason(c.rgb), vWorld), a);
   }
 `;
@@ -330,6 +339,42 @@ const POND_FRAG = /* glsl */ `
     vec3 col = d < 1.0 ? water : mix(mud * 0.85, mud, (d - 1.0) / 0.22);
     float a = d < 1.0 ? 1.0 : (1.0 - smoothstep(1.06, 1.22, d)) * 0.85;
     gl_FragColor = vec4(applyLight(col, vWorld), a);
+  }
+`;
+
+/**
+ * A painted pond (seen from above): the picture gives water, lily pads, weed and the bank.
+ * The shader adds slow ripples and glints on open water and the shadows of two fish that
+ * circle under the surface.
+ */
+const POND_PAINTED_FRAG = /* glsl */ `
+  ${LIGHT_GLSL}
+  uniform sampler2D map;
+  uniform float uSeed;
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  float fish(vec2 uv, float speed, float rad, float ph) {
+    float t = uTime * speed + ph;
+    vec2 c = vec2(0.5) + rad * vec2(cos(t), sin(t * 0.8));
+    vec2 dir = normalize(vec2(-sin(t), cos(t * 0.8) * 0.8));
+    vec2 d = uv - c;
+    float along = dot(d, dir);
+    float across = dot(d, vec2(-dir.y, dir.x));
+    return 1.0 - smoothstep(0.6, 1.0, length(vec2(along / 0.045, across / 0.016)));
+  }
+  void main() {
+    vec4 c = texture2D(map, vUv);
+    if (c.a < 0.05) discard;
+    float water = smoothstep(0.0, 0.08, c.b - c.r + 0.06) * (1.0 - smoothstep(0.35, 0.4, distance(vUv, vec2(0.5))));
+    vec3 col = c.rgb;
+    float w = sin(vWorld.x * 1.7 + uTime * 0.9) + sin(vWorld.z * 1.3 - uTime * 1.2);
+    col += 0.02 * w * water;
+    float sp = sin(vWorld.x * 4.1 + uTime * 1.5) * sin(vWorld.z * 3.3 - uTime * 1.1);
+    col += vec3(0.06) * smoothstep(0.95, 1.0, sp) * water;
+    float f = max(fish(vUv, 0.35, 0.16, uSeed), fish(vUv, -0.27, 0.22, uSeed * 1.7 + 2.0));
+    col = mix(col, col * 0.55, f * water * 0.6);
+    col = mix(col, vec3(0.16, 0.30, 0.38), uStorm * 0.35 * water);
+    gl_FragColor = vec4(applyLight(col, vWorld), c.a);
   }
 `;
 
@@ -445,6 +490,12 @@ export class WorldView {
     alias('cliff_2', 'cliff_1');
     alias('cliff_3', 'cliff_1');
     alias('flame_2', 'flame');
+    for (let i = 1; i <= 3; i++) {
+      alias(`bush_${i}`, 'berry_bush_empty');
+      alias(`bush_berries_${i}`, 'berry_bush');
+      alias(`sapling_${i}`, 'sapling');
+      alias(`sticks_${i}`, 'item_twigs');
+    }
     alias('stones_1', 'item_stone');
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -692,6 +743,9 @@ export class WorldView {
         uGrass: { value: grass },
         uGrassMean: { value: new THREE.Vector3(...meanColor(grassImg)) },
         uHasGrass: { value: grassImg ? 1 : 0 },
+        uSand: { value: this.repeatTexture(this.art.textures.ground_sand) },
+        uSandMean: { value: new THREE.Vector3(...meanColor(this.art.textures.ground_sand)) },
+        uHasSand: { value: this.art.textures.ground_sand ? 1 : 0 },
       },
       vertexShader: SPRITE_VERT,
       fragmentShader: GROUND_FRAG,
@@ -735,19 +789,40 @@ export class WorldView {
     this.scene.add(m);
   }
 
+  private repeatTexture(img: HTMLImageElement | undefined): THREE.Texture {
+    if (!img) {
+      const t = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+      t.needsUpdate = true;
+      return t;
+    }
+    const t = new THREE.Texture(img);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.NoColorSpace;
+    t.anisotropy = 8;
+    t.needsUpdate = true;
+    return t;
+  }
+
   private buildPonds() {
     const ponds = this.game.terrain.ponds;
     ponds.slice(0, 8).forEach((p, i) => shared.uPonds.value[i].set(p.x, p.z, p.r));
     shared.uPondCount.value = Math.min(8, ponds.length);
     ponds.forEach((p, i) => {
+      const painted = this.sprites[`pond_${(i % 3) + 1}`];
       const mat = new THREE.ShaderMaterial({
-        uniforms: { ...shared, uSeed: { value: i * 2.3 + p.x } },
+        uniforms: {
+          ...shared,
+          uSeed: { value: i * 2.3 + p.x },
+          map: { value: painted?.painted ? this.texture(`pond_${(i % 3) + 1}`) : null },
+        },
         vertexShader: SPRITE_VERT,
-        fragmentShader: POND_FRAG,
+        fragmentShader: painted?.painted ? POND_PAINTED_FRAG : POND_FRAG,
         transparent: true,
         depthWrite: false,
       });
-      const g = new THREE.PlaneGeometry(p.r * 2.6, p.r * 2.6);
+      // In the painted ponds the water fills about 76% of the picture; the rest is the bank.
+      const side = painted?.painted ? (p.r * 2) / 0.76 : p.r * 2.6;
+      const g = new THREE.PlaneGeometry(side, side);
       g.rotateX(-Math.PI / 2);
       const m = new THREE.Mesh(g, mat);
       m.position.set(p.x, 0.007, p.z);
@@ -787,6 +862,8 @@ export class WorldView {
       (items.get(key) ?? items.set(key, []).get(key)!).push({ m, c: new THREE.Color(b * (1 + warm), b, b * (1 - warm)) });
     };
     const grassy = (x: number, z: number) => t.height(x, z) > 0.075 && t.biome(x, z) !== 'rock';
+    const flowers = painted('flowers');
+    const reeds = painted('reed');
 
     for (let z = 2; z < MAP_SIZE - 2; z += 1) {
       for (let x = 2; x < MAP_SIZE - 2; x += 1) {
@@ -799,6 +876,7 @@ export class WorldView {
         else if (beach && r < 0.12) put(pebbles, px, pz, 0.8 + rnd() * 0.5);
         else if (h > 0.05 && t.biome(px, pz) === 'grass' && r < 0.012) put(pebbles, px, pz, 0.8 + rnd() * 0.5);
         else if (grassy(px, pz) && r < 0.1) put(tufts, px, pz, 0.5 + rnd() * 0.3);
+        else if (grassy(px, pz) && r < 0.125 && t.biome(px, pz) === 'grass') put(flowers, px, pz, 0.8 + rnd() * 0.4);
       }
     }
     // Tufts at the foot of things, a little in front of their bottom edge so they overlap it.
@@ -816,9 +894,38 @@ export class WorldView {
         else if (t.height(x, z) > 0.005) put(pebbles, x, z, 0.7 + rnd() * 0.6);
       }
     }
+    // Reeds and cattails round the ponds, thickest at the back and the sides.
+    for (const p of t.ponds) {
+      const n = 10 + Math.floor(rnd() * 6);
+      for (let i = 0; i < n; i++) {
+        const a = Math.PI + (rnd() - 0.5) * Math.PI * 1.6 + (rnd() < 0.3 ? Math.PI : 0); // mostly the far side
+        const rr = p.r * (0.95 + rnd() * 0.2);
+        const x = p.x + Math.cos(a) * rr;
+        const z = p.z + Math.sin(a) * rr * 0.9;
+        if (!reeds.length) break;
+        const key = reeds[Math.floor(rnd() * reeds.length)];
+        const sc = 0.7 + rnd() * 0.5;
+        const m = new THREE.Matrix4().compose(new THREE.Vector3(x, 0.01, z), tilt, new THREE.Vector3(rnd() < 0.5 ? -sc : sc, sc, sc));
+        (items.get(key) ?? items.set(key, []).get(key)!).push({ m, c: new THREE.Color(1, 1, 1) });
+      }
+    }
+    // Camp things from the reference: a water jug by the tent, a mooring post by the raft.
+    const sp = this.game.terrain.bay;
+    const near = (kind: string) => this.game.state.entities.find((e) => e.kind === kind && Math.hypot(e.x - sp.x, e.z - sp.z) < 14);
+    const tent = near('shelter');
+    if (tent && this.sprites.jug?.painted) put(['jug'], tent.x + 1.3, tent.z + this.footOffset(tent) + 0.35, 1);
+    const raft = near('raft');
+    if (raft && this.sprites.post?.painted) {
+      for (let x = raft.x + 1; x < raft.x + 6; x += 0.25) {
+        if (t.walkable(x, raft.z - 0.6)) {
+          put(['post'], x + 0.2, raft.z - 0.6, 1);
+          break;
+        }
+      }
+    }
     for (const [key, list] of items) {
       const mat = this.spriteMaterial(key);
-      if (key.startsWith('tuft')) mat.uniforms.uWindAmp = { value: 1 };
+      if (key.startsWith('tuft') || key.startsWith('reed') || key.startsWith('flowers')) mat.uniforms.uWindAmp = { value: key.startsWith('reed') ? 0.7 : 1 };
       const mesh = new THREE.InstancedMesh(this.geometry(key), mat, list.length);
       list.forEach((it, i) => {
         mesh.setMatrixAt(i, it.m);
@@ -865,22 +972,27 @@ export class WorldView {
   private keyFor(e: Entity): string {
     const v = e.v ?? 0;
     switch (e.kind) {
-      case 'palm': return `palm_${v % 3}`;
-      case 'tree': return `tree_${v % 3}`;
+      case 'palm': return this.sprites.palm_4?.painted ? PALMS[e.id % PALMS.length] : `palm_${v % 3}`;
+      case 'tree': return this.sprites.tree_6?.painted ? `tree_${(e.id % 6) + 1}` : `tree_${v % 3}`;
       case 'boulder': return `boulder_${(v % 3) + 1}`;
       case 'cliff': return `cliff_${(v % 3) + 1}`;
       case 'stones': return 'stones_1';
       case 'shelter': return 'tent';
-      case 'sapling': return e.regrowOn !== undefined ? 'sapling_bare' : 'sapling';
+      // Picked saplings keep their picture and are drawn shorter (see render).
+      case 'sapling': return this.sprites.sapling_1?.painted ? `sapling_${(e.id % 3) + 1}` : e.regrowOn !== undefined ? 'sapling_bare' : 'sapling';
       // Grass you can pick: the two fullest tufts, full size. Decor grass uses the others, smaller.
       case 'grass_tuft': return GATHER_TUFTS[e.id % GATHER_TUFTS.length];
-      case 'berry_bush': return e.regrowOn !== undefined ? 'berry_bush_empty' : 'berry_bush';
-      case 'boar': return 'boar_0';
+      case 'berry_bush':
+        if (this.sprites.bush_1?.painted) return `${e.regrowOn !== undefined ? 'bush' : 'bush_berries'}_${(e.id % 3) + 1}`;
+        return e.regrowOn !== undefined ? 'berry_bush_empty' : 'berry_bush';
+      case 'boar': return this.sprites.boar_6?.painted ? 'boar_1' : 'boar_0';
       case 'vines': return e.regrowOn !== undefined ? 'vines_cut' : 'vines';
       case 'nest': return e.regrowOn !== undefined ? 'nest_empty' : 'nest';
       case 'salt_pan': return (e.salt ?? 0) >= 1 ? 'salt_pan_full' : 'salt_pan';
       case 'rain_catcher': return (e.water ?? 0) >= 1 ? 'rain_catcher_full' : 'rain_catcher';
-      case 'drop': return `item_${e.item?.item ?? 'stone'}`;
+      case 'drop':
+        if (e.item?.item === 'twigs' && this.sprites.sticks_1?.painted) return `sticks_${(e.id % 3) + 1}`;
+        return `item_${e.item?.item ?? 'stone'}`;
       default: return e.kind;
     }
   }
@@ -899,7 +1011,7 @@ export class WorldView {
       }
       if (!v) {
         const mat = this.spriteMaterial(key);
-        const mesh = new THREE.Mesh(this.geometry(key, e.kind === 'drop' ? 0.7 : 1), mat);
+        const mesh = new THREE.Mesh(this.geometry(key, e.kind === 'drop' && !key.startsWith('sticks') ? 0.7 : 1), mat);
         mesh.rotation.x = -PITCH;
         const { w } = this.size(key);
         const sw = Math.min(3.2, w * (e.kind === 'palm' ? 0.35 : 0.75));
@@ -1063,11 +1175,18 @@ export class WorldView {
       let y = 0;
       if (e.kind === 'boar') {
         const b = g.brain(e);
-        const walking = b.moving && Math.sin(this.clock * (b.mode === 'wander' ? 8 : 16) + e.id) > 0;
-        v.mat.uniforms.map.value = v.castMat.uniforms.map.value = this.texture(walking ? 'boar_1' : 'boar_0');
         v.mat.uniforms.uFlash.value = b.hurt > 0 ? 0.6 : 0;
         sx = b.facing;
-        y = b.moving ? Math.abs(Math.sin(this.clock * 12 + e.id)) * 0.06 : 0;
+        if (this.sprites.boar_6?.painted) {
+          // Painted gallop: six frames, faster when charging; standing = the first frame.
+          const fps = b.mode === 'wander' ? 7 : 15;
+          const f = b.moving ? (Math.floor(this.clock * fps + e.id * 0.7) % 6) + 1 : 1;
+          v.mat.uniforms.map.value = v.castMat.uniforms.map.value = this.texture(`boar_${f}`);
+        } else {
+          const walking = b.moving && Math.sin(this.clock * (b.mode === 'wander' ? 8 : 16) + e.id) > 0;
+          v.mat.uniforms.map.value = v.castMat.uniforms.map.value = this.texture(walking ? 'boar_1' : 'boar_0');
+          y = b.moving ? Math.abs(Math.sin(this.clock * 12 + e.id)) * 0.06 : 0;
+        }
       } else if (SWAY[e.kind]) {
         // Sway in the wind: gentle gusts on a calm day, hard bending in a storm.
         const gust = 0.6 + 0.4 * Math.sin(this.clock * 0.37 + e.x * 0.05);
@@ -1082,6 +1201,7 @@ export class WorldView {
         // (handled below)
       }
       if (e.kind === 'grass_tuft' && e.regrowOn !== undefined) sy = 0.3; // cut down to stubble
+      if (e.kind === 'sapling' && e.regrowOn !== undefined && this.sprites[v.key].painted) sy = 0.55; // twigs broken off
       if (e.kind === 'drop') {
         y = 0.05 + Math.sin(this.clock * 3 + e.id) * 0.04;
       }
@@ -1206,6 +1326,12 @@ export class WorldView {
     else if (act >= 0) {
       switch (g.action) {
         case 'chop':
+          if (this.sprites.chop_4?.painted) {
+            // Painted swing with the axe in both hands: raise, swing, strike (and hold).
+            key = act < 0.3 ? 'chop_2' : act < 0.55 ? 'chop_3' : 'chop_4';
+            break;
+          }
+        // falls through
         case 'mine':
         case 'strike':
           key = act < 0.45 ? 'pose_swing_up' : 'pose_swing_down';
@@ -1219,10 +1345,11 @@ export class WorldView {
     // Running sideways: the painted run cycle, six frames per two steps.
     const runFrames = h.view === 'side' && g.moving && !sailing && act < 0 && this.sprites.run_1?.painted;
     if (runFrames) key = `run_${(Math.floor((h.phase / (Math.PI * 2)) * 6) % 6) + 1}`;
-    const posed = key.startsWith('pose_') || key.startsWith('run_') || act >= 0;
+    const posed = key.startsWith('pose_') || key.startsWith('run_') || key.startsWith('chop_') || act >= 0;
     if (posed && key !== 'hero_front') h.view = 'side';
     const sprite = this.sprites[key];
-    const mirror = h.view === 'side' || key.startsWith('pose_') || key.startsWith('run_') ? g.facing : 1;
+    const drawnTool = key.startsWith('chop_');
+    const mirror = h.view === 'side' || key.startsWith('pose_') || key.startsWith('run_') || drawnTool ? g.facing : 1;
 
     h.mat.uniforms.map.value = h.castMat.uniforms.map.value = this.texture(key);
     h.mesh.geometry = h.cast.geometry = this.geometry(key);
@@ -1266,7 +1393,7 @@ export class WorldView {
 
     // Tool in the fist.
     const hand = p.hand;
-    h.tool.visible = !!hand && key !== 'pose_paddle';
+    h.tool.visible = !!hand && key !== 'pose_paddle' && !drawnTool; // the chop frames have the axe drawn in
     this.heroHand.visible = h.tool.visible && key !== 'pose_pickup';
     if (hand) {
       h.toolMat.uniforms.map.value = this.texture(`item_${hand.item}`);
