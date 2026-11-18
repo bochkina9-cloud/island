@@ -22,3 +22,6 @@ duplicates removed. Moved to art/incoming/ (or candidates/) when chosen.
 | palm_young_1 | Young palm, straight trunk | |
 | palm_young_noref_1, 2 | Young palm, made without the style reference | softer, little ink: compare |
 | chop_side_99..103 | Chopping with an axe, 4 frames, side view | 101 and 102 best: axe held in both fists, clear arc; 99 shoulder-carry start also good |
+| reeds_1..3, pond_1..3, boar_run_1..3 | Pond plants, painted ponds, boar gallop | in the game: reeds_1, pond_1..3, boar_run_3 |
+| crab_1..3 | Crab: 4 scuttling frames + claws raised | |
+| boar_poses_1..3 | Boar: sniffing, alert, lunging, lying defeated | |
